@@ -9,8 +9,11 @@ Put these in the repository root:
 | file | what it is |
 |---|---|
 | `pattern_image.png` | the programmed reference pattern, as supplied |
-| `reference_spots.csv` | the Week-1 spot table extracted from it |
 | `bse-snapshot-*.png` | the flat-plate BSE snapshots |
+
+`reference_spots.csv` **is** in the repository - it is our own Week-1 output,
+not teaching material, so the registration scripts work as soon as you add the
+BSE snapshots.
 
 Then `./run_all.sh` picks them up automatically.
 

@@ -1,8 +1,8 @@
-# Course material and data supplied by the teaching team - do not commit.
+# Course material supplied by the teaching team - do not commit.
 # Drop these in the repository root and the scripts will find them.
+# reference_spots.csv IS tracked: it is our own Week-1 output.
 *.pdf
 pattern_image.png
-reference_spots.csv
 bse-snapshot-*.png
 data/*
 !data/README.md
