@@ -130,7 +130,7 @@ def main(path_a, path_b, out_path=None):
                  f"(systematic {sys_tot:.0f} um, random {noi_tot:.0f} um)",
                  fontsize=13)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=120, bbox_inches="tight", metadata={"Software": None})
     print("written:", out_path)
 
 

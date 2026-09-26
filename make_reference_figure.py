@@ -133,7 +133,7 @@ def main(img_path="pattern_image.png", csv_path="reference_spots.csv",
 
     fig.suptitle("MT035A Week 1 - programmed reference pattern and its scale",
                  fontsize=13, y=1.0)
-    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight", metadata={"Software": None})
     print("written:", out_path)
     print(f"  {len(x)} spots | pitch {pitch_px:.3f} px | "
           f"{px_per_mm:.4f} px/mm | pixel {um_per_px:.3f} um | "

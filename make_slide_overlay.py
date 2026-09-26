@@ -63,7 +63,7 @@ def main(img_path, out_path="week2-slide-overlay.png"):
     for a in ax:
         a.set_xticks([]); a.set_yticks([])
     fig.tight_layout()
-    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight", metadata={"Software": None})
     print(f"written: {out_path} | pixel {um:.3f} um | RMS "
           f"{np.sqrt((resid ** 2).sum(1).mean()) * um:.1f} um")
 

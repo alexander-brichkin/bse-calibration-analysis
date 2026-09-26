@@ -91,7 +91,7 @@ def main(img_path, out_path="week2-workflow.png"):
                  f"({SIZE / scale:.1f} x {SIZE / scale:.1f} mm) of the plate",
                  fontsize=13, y=1.06)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    fig.savefig(out_path, dpi=130, bbox_inches="tight", metadata={"Software": None})
     print("written:", out_path)
 
 

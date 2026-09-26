@@ -331,7 +331,7 @@ def overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
 
     fig.suptitle("MT035A Week 2 - BSE snapshot registered to the "
                  "programmed pattern", fontsize=13)
-    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    fig.savefig(out_path, dpi=120, bbox_inches="tight", metadata={"Software": None})
     plt.close(fig)
 
 
