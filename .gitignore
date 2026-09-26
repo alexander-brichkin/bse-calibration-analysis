@@ -1,0 +1,27 @@
+# Course material and data supplied by the teaching team - do not commit.
+# Drop these in the repository root and the scripts will find them.
+*.pdf
+pattern_image.png
+reference_spots.csv
+bse-snapshot-*.png
+data/*
+!data/README.md
+
+# Generated output
+*-overlay.png
+*-deviations.csv
+*-summary.csv
+week1-*.png
+week2-*.png
+week2-*.csv
+selftest-*.png
+
+# Python / editors / OS
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/

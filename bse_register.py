@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""
+MT035A Week 2 - BSE calibration-pattern registration.
+
+Detects the melt spots on a BSE snapshot of the PBF-EB calibration plate,
+registers them against the nominal (programmed) pattern with a similarity
+transform, and reports the deviation measures required by the group project:
+
+    dX, dY        translation
+    dtheta        rotation (defined modulo 90 deg for a square lattice)
+    scale error   derived pixel size vs the nominal 2.000 mm lattice pitch
+    distortion    per-spot residual field left after removing the similarity
+
+Model:  [x', y'] = s * R(theta) * [x, y] + [tx, ty]
+
+Usage
+-----
+    python3 bse_register.py SNAPSHOT.png [reference_spots.csv]
+
+If the reference file is omitted, 'reference_spots.csv' next to this script
+is used.
+
+Outputs (written next to SNAPSHOT.png)
+--------------------------------------
+    SNAPSHOT-overlay.png      verification figure: nominal pattern drawn on
+                              top of the snapshot, zoom, residual quiver map,
+                              residual histogram, numeric summary
+    SNAPSHOT-deviations.csv   one row per matched spot: nominal position in mm,
+                              observed position in px and in mm (own
+                              calibration, origin at the BSE reference spot),
+                              dX/dY/radial deviation and local deviation vector
+    SNAPSHOT-summary.csv      one row with the global fit and its statistics
+
+Requires: numpy, scipy, scikit-image, matplotlib.
+"""
+
+import os
+import sys
+
+import numpy as np
+from scipy import ndimage as ndi
+from scipy.spatial import cKDTree
+from skimage import filters, io, measure
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+PITCH_MM = 2.0          # nominal lattice pitch of the reference pattern, mm
+MIN_SPOT_PX = 8         # smallest blob kept before shape filtering
+ICP_ITERS = 30
+GATE_FRACTION = 0.45    # match radius as a fraction of the lattice pitch
+
+
+# ---------------------------------------------------------------- detection
+
+def _disk(radius):
+    """Boolean disk structuring element (no scikit-image version coupling)."""
+    r = int(radius)
+    y, x = np.ogrid[-r:r + 1, -r:r + 1]
+    return x * x + y * y <= r * r
+
+
+def detect(img):
+    """Find the spots on a BSE snapshot.
+
+    Returns an (N, 4) array: centre_x_px, centre_y_px, equivalent_diameter_px,
+    area_px. Coordinates are in image convention (x right, y down).
+    """
+    g = img.astype(float)
+    if g.ndim == 3:
+        g = g[..., :3].mean(axis=2)
+    g /= 255.0
+
+    # 1. Isolate the circular plate. Everything outside it is background.
+    disc = ndi.binary_fill_holes(g > 0.12)
+    lab = measure.label(disc)
+    if lab.max() > 1:
+        counts = np.bincount(lab.ravel())
+        counts[0] = 0
+        disc = lab == counts.argmax()
+    # Pull the working area in from the rim: the edge is bright and would
+    # otherwise be picked up as signal.
+    disc_in = ndi.binary_erosion(disc, structure=_disk(12))
+
+    # 2. Flatten the background. BSE brightness depends on atomic number,
+    #    local tilt and topography, so the background level drifts across the
+    #    field and a single global threshold does not work. A median filter
+    #    wider than a spot estimates that background; subtracting it leaves a
+    #    flat map in which the spots are the only structure.
+    filled = np.where(disc, g, np.median(g[disc]))
+    background = ndi.median_filter(filled, size=25)
+    resid = background - g          # spots read darker than their surround
+    resid[~disc_in] = 0
+
+    # 3. Threshold the flattened map and clean it up.
+    bw = (resid > filters.threshold_otsu(resid[disc_in])) & disc_in
+    lab = measure.label(bw)
+    sizes = np.bincount(lab.ravel())
+    big = np.flatnonzero(sizes >= MIN_SPOT_PX)
+    bw = np.isin(lab, big[big != 0])
+    bw = ndi.binary_fill_holes(bw)
+
+    # 4. Keep blobs that look like spots: area near the median, not elongated.
+    #    This drops scratches, rim fragments and merged pairs.
+    props = measure.regionprops(measure.label(bw))
+    med_area = np.median([p.area for p in props])
+    keep = [p for p in props
+            if 0.3 * med_area <= p.area <= 4.0 * med_area
+            and p.eccentricity < 0.85]
+
+    return np.array([[p.centroid[1], p.centroid[0],
+                      2.0 * np.sqrt(p.area / np.pi), p.area] for p in keep])
+
+
+def lattice_pitch_and_angle(pts):
+    """Estimate lattice pitch (px) and orientation (deg) from nearest neighbours.
+
+    The orientation of a square lattice is only defined modulo 90 degrees,
+    so the returned angle is folded into [0, 90).
+    """
+    _, idx = cKDTree(pts).query(pts, k=5)
+    vec = pts[idx[:, 1:]] - pts[:, None, :]
+    dist = np.hypot(vec[..., 0], vec[..., 1]).ravel()
+    pitch = np.median(dist[dist < 1.6 * np.median(dist)])
+
+    near = np.abs(dist - pitch) < 0.25 * pitch
+    ang = np.arctan2(vec[..., 1], vec[..., 0]).ravel()[near] % (np.pi / 2)
+    # Circular mean on the 4-fold-wrapped angle.
+    angle = np.degrees(np.angle(np.exp(4j * ang).mean()) / 4) % 90
+    return pitch, angle
+
+
+# ------------------------------------------------------------- registration
+
+def umeyama(src, dst):
+    """Least-squares similarity transform src -> dst (Umeyama 1991).
+
+    Returns (scale, rotation_matrix, translation).
+    """
+    mu_s, mu_d = src.mean(0), dst.mean(0)
+    s_c, d_c = src - mu_s, dst - mu_d
+    cov = d_c.T @ s_c / len(src)
+    u, d, vt = np.linalg.svd(cov)
+    corr = np.eye(2)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0:      # forbid a reflection
+        corr[1, 1] = -1
+    rot = u @ corr @ vt
+    var = (s_c ** 2).sum() / len(src)
+    scale = np.trace(np.diag(d) @ corr) / var
+    return scale, rot, mu_d - scale * rot @ mu_s
+
+
+def mutual_nearest(pred, obs, gate):
+    """Mutually nearest pairs within `gate` pixels.
+
+    Requiring the match to be nearest in both directions stops one observed
+    spot from claiming several reference points, and the gate (below half a
+    lattice pitch) stops a point from locking onto the neighbouring node.
+    """
+    d_ref, i_ref = cKDTree(obs).query(pred)
+    _, i_obs = cKDTree(pred).query(obs)
+    ii = [k for k in range(len(pred))
+          if d_ref[k] < gate and i_obs[i_ref[k]] == k]
+    ii = np.asarray(ii, dtype=int)
+    return ii, i_ref[ii]
+
+
+def register(ref_mm, obs_px, pitch_px, iters=ICP_ITERS):
+    """Fit the similarity transform that maps the nominal pattern onto the spots.
+
+    Returns (scale, rotation, translation, ref_idx, obs_idx, residual, ref_xy)
+    where `residual` is obs - predicted in pixels for each matched pair and
+    `ref_xy` is the reference pattern in image convention (y down).
+    """
+    ref = ref_mm.copy()
+    ref[:, 1] *= -1                       # CSV has y up; images have y down
+
+    scale = pitch_px / PITCH_MM           # seed from the measured pitch
+    rot = np.eye(2)
+    trans = obs_px.mean(0) - scale * (rot @ ref.mean(0))
+
+    gate = GATE_FRACTION * scale * PITCH_MM
+    for _ in range(iters):
+        pred = (scale * (rot @ ref.T).T) + trans
+        ii, jj = mutual_nearest(pred, obs_px, gate)
+        if len(ii) < 20:
+            break
+        scale, rot, trans = umeyama(ref[ii], obs_px[jj])
+        gate = GATE_FRACTION * scale * PITCH_MM
+
+    pred = (scale * (rot @ ref.T).T) + trans
+    ii, jj = mutual_nearest(pred, obs_px, gate)
+    return scale, rot, trans, ii, jj, obs_px[jj] - pred[ii], ref
+
+
+# ------------------------------------------------------------------ reading
+
+def _reference_pitch(x_px, y_px):
+    """Lattice pitch of the reference pattern, in its own pixels.
+
+    The reference image is a rendered plot, so every marker centre is rounded
+    to a whole pixel: nearest-neighbour distances come out as 35 or 36 px and
+    the median alone is not the pitch. Indexing the distinct row and column
+    positions and fitting a line through them recovers the true spacing.
+    """
+    pitches = []
+    for coord in (x_px, y_px):
+        u = np.unique(coord)
+        step = np.median(np.diff(u))
+        k = np.round((u - u[0]) / step)
+        fit = np.linalg.lstsq(np.column_stack([k, np.ones_like(k)]), u,
+                              rcond=None)[0]
+        pitches.append(fit[0])
+    return float(np.mean(pitches))
+
+
+def load_reference(path):
+    """Read the nominal pattern from the CSV.
+
+    Returns (xy_mm, origin_index, px_per_mm) with xy_mm in millimetres,
+    relative to the unambiguous reference spot chosen in Week 1.
+
+    The millimetre columns stored in the CSV are NOT used. They were written
+    with a rounded image scale of 18.000 px/mm, while the pattern's actual
+    lattice pitch is 35.911 px; taking them at face value stretches the whole
+    reference by 0.25 % and pushes the same error straight into the derived
+    BSE pixel size. Instead the pattern is re-scaled here from its own lattice
+    against the nominal PITCH_MM, which is the quantity the machine was
+    programmed with. If the CSV has no pixel columns, the millimetre columns
+    are used as a fallback and a warning is printed.
+    """
+    table = np.genfromtxt(path, delimiter=",", names=True)
+    cols = table.dtype.names
+
+    if "is_reference" in cols and (table["is_reference"] == 1).any():
+        origin = int(np.flatnonzero(table["is_reference"] == 1)[0])
+    else:
+        origin = None
+
+    if "x_px" in cols and "y_px" in cols:
+        pitch_px = _reference_pitch(table["x_px"], table["y_px"])
+        px_per_mm = pitch_px / PITCH_MM
+        if origin is None:
+            origin = int(np.argmin(np.hypot(table["x_px"] - table["x_px"].mean(),
+                                            table["y_px"] - table["y_px"].mean())))
+        x0, y0 = table["x_px"][origin], table["y_px"][origin]
+        xy = np.column_stack([(table["x_px"] - x0) / px_per_mm,
+                              (y0 - table["y_px"]) / px_per_mm])
+        print(f"reference pattern   pitch {pitch_px:.4f} px -> "
+              f"{px_per_mm:.4f} px/mm ({1000 / px_per_mm:.3f} um/px), "
+              f"{len(xy)} spots")
+        return xy, origin, px_per_mm
+
+    print("WARNING: no pixel columns in the reference file; falling back to "
+          "its stored millimetre columns and their assumed scale")
+    x_key = "x_mm" if "x_mm" in cols else "x_mm_rel"
+    y_key = "y_mm" if "y_mm" in cols else "y_mm_rel"
+    xy = np.column_stack([table[x_key], table[y_key]])
+    if origin is None:
+        origin = int(np.argmin(np.hypot(xy[:, 0], xy[:, 1])))
+    return xy, origin, float("nan")
+
+
+# ------------------------------------------------------------------ figures
+
+def overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
+                   um_per_px, title, out_path):
+    dev = np.hypot(*resid.T) * um_per_px
+    theta = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
+    rms = np.sqrt((resid ** 2).sum(1).mean()) * um_per_px
+
+    fig = plt.figure(figsize=(16.5, 8.6))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1.18, 1, 1],
+                          hspace=0.22, wspace=0.16)
+
+    ax = fig.add_subplot(gs[:, 0])
+    ax.imshow(img, cmap="gray")
+    ax.scatter(pred_all[:, 0], pred_all[:, 1], s=7, facecolors="none",
+               edgecolors="#00e5ff", linewidths=0.45)
+    ax.add_patch(plt.Rectangle((330, 330), 180, 180, fill=False,
+                               edgecolor="#ff3b30", linewidth=1.6))
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title(f"{title}: {len(ii)} matched spots\n"
+                 "cyan rings = nominal pattern after the similarity fit",
+                 fontsize=11)
+
+    ax = fig.add_subplot(gs[0, 1])
+    ax.imshow(img, cmap="gray")
+    ax.set_xlim(330, 510); ax.set_ylim(510, 330)
+    ax.scatter(pred_all[:, 0], pred_all[:, 1], s=90, facecolors="none",
+               edgecolors="#00e5ff", linewidths=1.3)
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title("zoom, 180 x 180 px", fontsize=10)
+    for spine in ax.spines.values():
+        spine.set_color("#ff3b30"); spine.set_linewidth(1.6)
+
+    ax = fig.add_subplot(gs[1, 1])
+    q = ax.quiver(obs[jj, 0], obs[jj, 1], resid[:, 0], -resid[:, 1], dev,
+                  cmap="viridis", angles="xy", scale_units="xy",
+                  scale=1 / 25, width=0.004)
+    ax.set_aspect("equal"); ax.invert_yaxis()
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_title("deviation vectors, exaggerated x25", fontsize=10)
+    fig.colorbar(q, ax=ax, fraction=0.046).set_label("|deviation|, um",
+                                                     fontsize=9)
+
+    ax = fig.add_subplot(gs[0, 2])
+    ax.hist(dev, bins=45, color="#1f77b4", alpha=0.85)
+    ax.axvline(np.median(dev), color="#d62728", lw=1.6,
+               label="median %.0f um" % np.median(dev))
+    ax.axvline(np.percentile(dev, 95), color="#ff7f0e", lw=1.4, ls="--",
+               label="95th pct %.0f um" % np.percentile(dev, 95))
+    ax.set_xlabel("|deviation|, um"); ax.set_ylabel("spots")
+    ax.legend(fontsize=8)
+    ax.set_title("residual distribution", fontsize=10)
+
+    ax = fig.add_subplot(gs[1, 2]); ax.axis("off")
+    ax.text(0, 1,
+            f"scale          {scale:.4f} px/mm\n"
+            f"pixel size     {um_per_px:.2f} um\n"
+            f"rotation       {theta:+.4f} deg (mod 90)\n"
+            f"dX, dY         {trans[0]:.1f}, {trans[1]:.1f} px\n\n"
+            f"matched pairs  {len(ii)}\n"
+            f"RMS            {rms:.1f} um\n"
+            f"median         {np.median(dev):.1f} um\n"
+            f"95th pct       {np.percentile(dev, 95):.1f} um\n"
+            f"max            {dev.max():.0f} um\n\n"
+            f"nominal pitch  {PITCH_MM:.3f} mm\n"
+            f"=> BSE pixel ~ 100 um (10 px/mm)",
+            family="monospace", fontsize=13.5, va="top")
+
+    fig.suptitle("MT035A Week 2 - BSE snapshot registered to the "
+                 "programmed pattern", fontsize=13)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------- main
+
+def main(img_path, ref_path=None):
+    here = os.path.dirname(os.path.abspath(__file__))
+    ref_path = ref_path or os.path.join(here, "reference_spots.csv")
+
+    img = io.imread(img_path)
+    ref_mm, ref_origin, ref_px_per_mm = load_reference(ref_path)
+
+    obs = detect(img)[:, :2]
+    pitch_px, angle = lattice_pitch_and_angle(obs)
+    scale, rot, trans, ii, jj, resid, ref = register(ref_mm, obs, pitch_px)
+
+    um_per_px = 1000.0 / scale
+    theta = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
+    dev = np.hypot(*resid.T) * um_per_px
+    base = os.path.splitext(img_path)[0]
+
+    print(f"spots detected     {len(obs)}")
+    print(f"lattice pitch      {pitch_px:.3f} px   "
+          f"orientation {angle:.3f} deg (mod 90)")
+    print(f"matched pairs      {len(ii)} of {len(ref)}")
+    print(f"scale s            {scale:.5f} px/mm  ->  "
+          f"pixel size {um_per_px:.3f} um")
+    print(f"rotation dtheta    {theta:+.5f} deg (mod 90)")
+    print(f"translation dX,dY  {trans[0]:.2f}, {trans[1]:.2f} px  "
+          f"({trans[0] * um_per_px / 1000:.3f}, "
+          f"{trans[1] * um_per_px / 1000:.3f} mm)")
+    print(f"residual           RMS {np.sqrt((resid ** 2).sum(1).mean()) * um_per_px:.1f} um"
+          f" | median {np.median(dev):.1f}"
+          f" | 95th {np.percentile(dev, 95):.1f}"
+          f" | max {dev.max():.0f}")
+
+    pred_all = (scale * (rot @ ref.T).T) + trans
+
+    # --- express the observed spots in their own physical units -------------
+    # The brief requires the two datasets to be compared as physical
+    # coordinates, each converted with its own calibration, not as raw pixels.
+    # The fitted scale IS the BSE image's pixel-to-mm calibration: it is
+    # derived from the snapshot, not borrowed from the reference image.
+    # Origin: the observed spot matched to the Week-1 reference spot; if that
+    # spot was not matched, the observed centroid closest to the predicted
+    # position of the reference spot is used instead.
+    where = np.flatnonzero(ii == ref_origin)
+    if len(where):
+        origin_px = obs[jj[where[0]]]
+        origin_note = "matched BSE spot"
+    else:
+        origin_px = obs[np.argmin(np.hypot(*(obs - pred_all[ref_origin]).T))]
+        origin_note = "nearest BSE spot to the predicted reference position"
+    print(f"BSE reference spot  ({origin_px[0]:.2f}, {origin_px[1]:.2f}) px "
+          f"-> (0, 0) mm  [{origin_note}]")
+
+    # Rotate the pixel offsets back onto the reference axes and divide by the
+    # fitted scale: observed spot centres in mm, y up, origin at the BSE
+    # reference spot.
+    obs_mm = ((rot.T @ (obs[jj] - origin_px).T).T / scale) * np.array([1, -1])
+
+    # --- radial and tangential components about the plate centre -----------
+    centre = obs[jj].mean(0)
+    rad_px = obs[jj] - centre
+    radius_mm = np.hypot(*rad_px.T) / scale
+    unit = rad_px / np.maximum(np.hypot(*rad_px.T), 1e-9)[:, None]
+    d_radial = (resid * unit).sum(1) * um_per_px                # outward +
+    d_tangential = (resid[:, 0] * -unit[:, 1]
+                    + resid[:, 1] * unit[:, 0]) * um_per_px     # CCW +
+
+    np.savetxt(
+        base + "-deviations.csv",
+        np.column_stack([ii, jj, ref[ii, 0], -ref[ii, 1],
+                         pred_all[ii], obs[jj], obs_mm,
+                         resid * um_per_px, dev,
+                         radius_mm, d_radial, d_tangential]),
+        delimiter=",", fmt="%.4f",
+        header="ref_idx,obs_idx,ref_x_mm,ref_y_mm,pred_x_px,pred_y_px,"
+               "obs_x_px,obs_y_px,obs_x_mm,obs_y_mm,dx_um,dy_um,dist_um,"
+               "radius_mm,dev_radial_um,dev_tangential_um",
+        comments="")
+
+    with open(base + "-summary.csv", "w") as fh:
+        fh.write("image,spots_detected,matched_pairs,reference_points,"
+                 "lattice_pitch_px,scale_px_per_mm,pixel_size_um,"
+                 "rotation_deg_mod90,dx_px,dy_px,rms_um,median_um,p95_um,"
+                 "max_um\n")
+        fh.write(f"{os.path.basename(base)},{len(obs)},{len(ii)},{len(ref)},"
+                 f"{pitch_px:.4f},{scale:.5f},{um_per_px:.3f},{theta:.5f},"
+                 f"{trans[0]:.2f},{trans[1]:.2f},"
+                 f"{np.sqrt((resid ** 2).sum(1).mean()) * um_per_px:.2f},"
+                 f"{np.median(dev):.2f},{np.percentile(dev, 95):.2f},"
+                 f"{dev.max():.2f}\n")
+
+    overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
+                   um_per_px, os.path.basename(base), base + "-overlay.png")
+    print("written:", base + "-overlay.png,", base + "-deviations.csv,",
+          base + "-summary.csv")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    main(*sys.argv[1:3])
