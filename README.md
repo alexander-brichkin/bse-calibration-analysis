@@ -65,19 +65,22 @@ image measured, so it is not.
 
 Five images: three flat plates and two tilted ones.
 
-| image | detected | matched | pixel size | Δθ (mod 90°) | residual RMS | affine anisotropy |
-|---|---|---|---|---|---|---|
-| flat 1 | 1282 | 1272 | 99.969 µm | −0.0119° | 51.0 µm | +0.121 % |
-| flat 2 | 1441 | 1441 | 99.977 µm | −0.0090° | 47.8 µm | +0.087 % |
-| flat 3 | 1456 | 1444 | 99.783 µm | +0.0553° | 49.6 µm | +0.114 % |
-| tilted A | 1472 | 1472 | 99.987 µm | −0.0112° | 48.3 µm | +0.065 % |
-| tilted B | 1586 | 1585 | 100.035 µm | −0.0031° | 42.0 µm | +0.093 % |
+| image | matched of 1597 | pixel size | Δθ (mod 90°) | residual RMS | affine anisotropy |
+|---|---|---|---|---|---|
+| flat 1 | 1481 | 99.9803 µm | −0.0200° | 55.6 µm | +0.093 % |
+| flat 2 | 1500 | 99.9804 µm | −0.0108° | 51.6 µm | +0.076 % |
+| flat 3 | 1552 | 99.7708 µm | +0.0564° | 51.5 µm | +0.101 % |
+| tilted A | 1503 | 99.9924 µm | −0.0105° | 52.4 µm | +0.063 % |
+| tilted B | 1597 | 100.0358 µm | −0.0028° | 42.2 µm | +0.092 % |
 
 ### Why the registration can be believed
 
 - **Independent images agree on the scale to better than 0.1 %.** Nothing in
   the pipeline takes a pixel size as input; it falls out of fitting a 2.000 mm
-  lattice to the observed spots. The first two flats agree to 82 ppm.
+  lattice to the observed spots. The first two flats agree to **1.0 ppm**
+  (10.001970 against 10.001960 px/mm). They agreed to 82 ppm before the
+  rotation seed and the second pass; the fit is now constrained by about 1500
+  spots per image instead of about 1300.
 - **All five land within 0.25 % of a round 100 µm/px**, which is what a
   hardware setting would be. We did not tune anything towards that number.
 - **The residual is far below one lattice step.** A median of 36 µm against a
@@ -130,6 +133,50 @@ across the melted pattern settles it — 88.0 mm against 85.9 mm is the test.
 
 ---
 
+## What the cross-check changed
+
+Three implementations of this task were written separately in the group and
+then compared. Methods were adopted where they measured better on our own test
+set, and only there.
+
+**Adopted.**
+
+* *Seed the rotation from the measured lattice angle.* Without it the fit
+  starts from zero rotation and converges only while the pattern sits within
+  about 2° of the reference axes. Beyond that the nearest-neighbour matching
+  locks onto the wrong lattice node and the fit fails **while still reporting a
+  plausible angle** — at 20° it returned a 0.079 % pixel-size error from a
+  completely broken fit. The lattice angle is known modulo 90°, so all four
+  candidates are tried and the one matching the most spots wins. The fit now
+  holds to 0.008 % at 20°.
+* *Split merged spots instead of discarding them.* Two touching spots form one
+  elongated blob that the eccentricity filter throws away, losing both. A
+  marker-based watershed on the local maxima of the flattened map cuts along
+  the intensity valley and keeps both.
+* *A predicted-position second pass.* The detector has to decide from the image
+  alone that something is a spot, so it loses the faint ones, the merged ones
+  and the ones near the rim. After the first fit the lattice is known, so every
+  unmatched reference point has a predicted position and a window of a third of
+  a pitch to search. On the weakest image this recovers 183 spots.
+
+**Rejected, after measuring it.** A morphological black top-hat is the textbook
+background removal and finds about 13 more spots on a clean snapshot. It is
+also a local min–max operation, so it is noise-sensitive: at σ = 30 grey levels
+it returns a confident **11.5 % pixel-size error** where the median filter is
+still correct. Thirteen spots are not worth that, so the median stays the
+default and `robustness.py` measures both.
+
+**The guard this forced.** The second pass searches where the first fit says a
+spot must be, so it confirms whatever lattice the first fit chose — including a
+wrong one. Under noise it finds *something* at nearly every wrong position, so
+an unguarded version came back from a broken fit with **more** matches than a
+good one, destroying the matched fraction as a warning sign. The refinement is
+therefore accepted only if it recovers no more than a fifth of the first pass's
+matches, moves the scale by less than 0.1 %, and does not inflate the residual
+on the spots the detector itself found. With the guard in place the pipeline
+fails loudly again: at σ = 30 the match count drops to 1047 and the second pass
+contributes nothing.
+
 ## Systematic or random?
 
 A single image cannot tell: any residual left after a fit looks like a pattern.
@@ -140,8 +187,17 @@ while detection noise does not.
 
 | | over 2 flats | over 3 flats |
 |---|---|---|
-| systematic | 32.5 µm | 25.4 µm |
-| random | 35.5 µm | 39.6 µm |
+| systematic | 16.1 µm | 16.8 µm |
+| random | 46.6 µm | 45.0 µm |
+
+The split is computed only over spots the **detector** found in every image —
+1213 of the 1443 matched in both flats. A spot recovered by the second pass is
+measured with a window centroid rather than a blob centroid, and pooling two
+estimators with different scatters would inflate the random term and wash out
+the systematic one. On an identical spot set the second pass improves the
+random term from 71.7 µm to 50.9 µm and leaves the systematic term unchanged
+at about 14 µm: it makes the lattice better determined, it does not invent
+agreement.
 
 Of the random part, about 16 µm per axis is the reference file's pixel
 quantisation, leaving roughly 17–22 µm of genuine detection noise.
@@ -161,36 +217,40 @@ noise.
 
 **Foreshortening is not a tilt signature in this system.** One expects a tilted
 plane to be compressed along the tilt axis, giving an anisotropic scale. The
-measurement says otherwise: the tilted plates show *less* anisotropy
-(0.065 %, 0.093 %) than the flat ones (0.121 %, 0.087 %). The reason is the
+measurement says otherwise: the tilted plates (+0.063 %, +0.092 %) sit inside
+the spread of the flat ones (+0.093 %, +0.076 %, +0.101 %) — the two
+populations do not separate at all. The reason is the
 same fact the whole project rests on — the beam is deflected to a commanded
 (x, y) and the BSE image is formed by the same deflection, so both the writing
 and the reading use the same in-plane coordinates. Tilt changes the working
 distance, that is the focus, not the geometry. Any tilt estimate has to come
 from focus.
 
-The left panel shows where each image's spot-area gradient points: the two
-flats sit inside the circle of their own scatter, both tilted plates and the
-plate labelled flat 3 fall outside it. The right panel follows spot area along
-each image's own departure direction — the tilted plates trend monotonically,
-the flats wander. A radial average, which is the obvious thing to plot, hides
-all of this, because a tilt is directional and averaging over angle destroys
-exactly the signal. (TILT_A trends downward rather than upward because its raw
-gradient points nearly opposite to its excess: its departure from the baseline
-is a weakening in the baseline's own direction.)
+The left panel shows where each image's spot-area gradient points, the right
+panel follows spot area along each image's own departure direction. A radial
+average — the obvious thing to plot — hides all of it, because a tilt is
+directional and averaging over angle destroys exactly the signal.
 
-**A flat plate already varies.** Spot area has a directional gradient of
-0.37–0.47 %/mm on a flat plate, because the BSE detector sits to one side. That
-is the same order as the tilt effect, so a raw gradient separates nothing — one
-flat plate's raw gradient (0.467 %/mm) exceeds a tilted plate's (0.448 %/mm).
-The flats are therefore used as a baseline and subtracted:
+**A flat plate already varies, and the raw gradient separates nothing.** Spot
+area has a directional gradient of 0.37–0.53 %/mm on a flat plate, because the
+BSE detector sits to one side. The clearest demonstration is TILT_A: its raw
+gradient, 0.219 %/mm, is the **smallest of all five images**, and it is the
+plate with the largest genuine tilt signal. Ranking the raw numbers would put
+it last. The flats are therefore averaged into a baseline (0.421 %/mm at 16.2°)
+and subtracted vectorially, and what is left is compared against the
+flat-to-flat scatter of 0.168 %/mm:
 
-| plate | excess gradient over the flat baseline | against the flat-to-flat scatter |
+| plate | excess over the flat baseline | against the flat-to-flat floor |
 |---|---|---|
-| tilted A | 0.241 %/mm | 2.4× |
-| tilted B | 0.284 %/mm | 2.8× |
-| flat 3 | 0.358 %/mm | 3.5× |
-| flats | 0.102 %/mm | 1.0× |
+| tilted A | 0.596 %/mm at 181° | **3.5×** |
+| tilted B | 0.487 %/mm at 138° | **2.9×** |
+| flat 3 | 0.239 %/mm at 299° | 1.4× |
+| flat 2 | 0.217 %/mm at 108° | 1.3× |
+| flat 1 | 0.050 %/mm at 178° | 0.3× |
+
+Both tilted plates stand clearly above the floor and all three flats sit at or
+below 1.4×, so the measurement separates the two populations — which the raw
+gradient, the anisotropy and the radial profile all failed to do.
 
 **No tilt angle is reported.** Converting %/mm of spot area into degrees needs
 the beam's depth-of-focus characteristic — how spot area grows per millimetre
@@ -198,11 +258,16 @@ of working-distance error — which the supplied data does not contain. What the
 data supports is a focus gradient across the plate, consistent with a tilt, of
 the magnitudes above.
 
-Two things worth flagging. The plate labelled *flat 3* shows the **largest**
-excess of all, larger than either tilted plate, so its provenance is worth
-checking. And the positional measurement is untroubled by tilt: the tilted
-plates register normally, one of them with the lowest residual of all five
-images. Tilt degrades focus, not the coordinate check.
+One thing worth flagging. The plate labelled *flat 3* has the largest excess
+of the three flats, 1.4× the floor, and also the pixel size furthest from the
+other two (99.771 µm against 99.980 µm). Neither is damning on its own — 1.4×
+is inside the flat population — but the two anomalies point the same way, so
+its provenance is worth a question to the teacher rather than a claim from us.
+
+The positional measurement is untroubled by tilt: the tilted plates register
+normally, and tilted B has the lowest residual and the most complete match of
+all five images (1597 of 1597). Tilt degrades focus, not the coordinate
+check.
 
 ---
 
@@ -210,21 +275,19 @@ images. Tilt degrades focus, not the coordinate check.
 
 ![Robustness sweep](docs/week4-robustness.png)
 
-Four things in this figure are worth reading carefully, because the first
-version of it got all four wrong. Rotation was missing from the panels
-altogether, and it is the only variation that moves the measurand by more than
-a hundredth of a percent. Six runs found no spots at all; they have no pixel
-size, so plotting a zero error for them turned total failure into a perfect
-score — they now carry a marker on the axis and no red point. Shading a span
-from the first failure to the edge of the axis condemned whole usable ranges,
-so failing runs are marked one at a time. And retention above 100 % is real,
+Three conventions in this figure are worth stating, because the first version
+of it got each of them wrong. A run that found no spots has no pixel size, so
+it carries a marker on the axis and no red point — plotting a zero error there
+turned a total failure into a perfect score. Failing runs are marked one at a
+time rather than by shading a span from the first failure to the edge of the
+axis, which condemned whole usable ranges. And retention above 100 % is real,
 not a bug: mild blur and reduced contrast round the blobs, so **more** of them
 pass the shape filter than in the clean run — the clean run is not the best
 detection this pipeline can do.
 
 `robustness.py` re-runs the whole pipeline on a real snapshot under controlled
-degradations and parameter changes, one at a time. Of 61 runs, 44 stayed inside
-both limits and 52 remained accurate on whatever spots survived. Two criteria are kept apart
+degradations and parameter changes, one at a time. Of 61 runs, 48 stayed inside
+both limits and 54 remained accurate on whatever spots survived. Two criteria are kept apart
 on purpose: **completeness** (are the spots still there — 95 % of what a clean
 run finds) and **accuracy** (is the fit built from whatever survived still
 right — pixel size within 0.1 %, angle within 0.05°). Both thresholds are a
@@ -235,27 +298,41 @@ matters for a limit.
 | variation | reliable to | first failure | what fails first |
 |---|---|---|---|
 | contrast compression | **12× reduction** | never in range | — |
-| additive noise | σ = 10 grey levels | σ = 20 | completeness (94 %) |
-| blur | σ = 4 px | σ = 6 | completeness (37 %) |
+| additive noise | σ = 20 grey levels | σ = 30 | completeness (71 %) |
+| blur | σ = 4 px | σ = 6 | completeness (36 %) |
 | background ramp | 90 grey levels | 120 | pipeline collapses |
-| background filter width | 17–61 px | 11 px | completeness (87 %) |
+| background filter width | **11–61 px** | never in range | — |
 | minimum blob area | 2–64 px | never in range | — |
 | eccentricity limit | 0.70–0.99 | 0.55 | pipeline collapses |
 | match gate | 0.45–0.75 × pitch | 0.30 | pipeline collapses |
-| known rotation | 2° | 5° | **accuracy** (0.91 % pixel size) |
+| known rotation | **0–5°, and 3° with a 27 px shift** | never in range | — |
 
 **Contrast is a non-issue** — compressing grey values twelvefold changes
 nothing, because the flatten-and-subtract step normalises the background away
 before Otsu sees the image. **Noise is the tightest constraint.** **Parameter
-choices are not delicate**: the background filter can vary from 17 to 61 px and
-the minimum blob area 32-fold without moving the pixel size by 0.01 %.
+choices are not delicate**: every parameter here can be moved over its whole
+swept range without the pixel size leaving ±0.016 %, and the background filter
+and the minimum blob area never break the method at all.
 
-**A real weakness, found by this test.** Applying a *known* rotation and asking
-the fit to recover it: below about 2° it comes back to a thousandth of a
-degree; at 5° the fit fails while still reporting a plausible-looking angle,
-because ICP starts from the identity rotation and the outer spots are displaced
-by more than the half-pitch gate. The matched fraction is what gives it away —
-it drops to 65 %. That is why the matched fraction is the first number to read.
+**Accuracy outlives completeness.** Wherever the pipeline fails in this sweep
+it fails by losing spots, not by returning a wrong number: at blur σ = 6 only
+36 % of the spots survive, and the pixel size from those is still right to
+0.014 %. Occlusion is the clearest case — it removes spots by construction, so
+every occlusion run fails completeness while the fit on what remains stays
+accurate to better than 0.008 %. The one exception is heavy noise, σ ≥ 45,
+where the fit itself breaks down; there the match count has already collapsed
+to 18 %, so the failure announces itself.
+
+**The weakness this test found, and the fix it forced.** The first version of
+this sweep showed the fit failing at a known 5° rotation — returning a
+plausible-looking angle from a broken solution, with the matched fraction
+dropping to 65 % as the only clue. The cause was that ICP started from the
+identity rotation, so beyond about 2° the outer spots were displaced by more
+than the half-pitch gate and matched to the wrong lattice node. Seeding the
+rotation from the measured lattice angle removes it: the rotation family is now
+6/6 reliable, 5° comes back with a 0.0005 % pixel-size error and a full match,
+and a 3° rotation combined with a 27 px translation costs 0.004 %. The sweep is
+in the repository because it found this, not to show that nothing is wrong.
 
 ---
 
@@ -315,9 +392,15 @@ The course images are not in this repository — they belong to the teaching
 team. Put them in the root (they are in `.gitignore`) and:
 
 ```bash
-./run_all.sh                       # every bse-snapshot-*.png in the folder
-./run_all.sh image1.png image2.png # or the ones you name
+./run_all.sh                       # weeks 1-3 and every figure
+./run_all.sh --sweep               # the above plus the Week-4 sweep (minutes)
+./run_all.sh image1.png image2.png # or just the snapshots you name
 ```
+
+`run_all.sh` runs the self-test first, so a broken pipeline fails before it
+produces numbers that look plausible. The Week-4 sweep is behind a flag only
+because it re-runs the whole pipeline 61 times; `python3 robustness.py
+--plot-only` redraws its figure from the stored `week4-robustness.csv`.
 
 | script | what it does |
 |---|---|
@@ -329,6 +412,7 @@ team. Put them in the root (they are in `.gitignore`) and:
 | `check_orientation.py` | resolves the 90° lattice ambiguity |
 | `robustness.py` | controlled degradations and parameter sweeps |
 | `selftest.py` | synthetic ground-truth check |
+| `run_all.sh` | reproduces every result and figure in this README |
 | `make_reference_figure.py`, `make_workflow_figure.py`, `make_slide_overlay.py` | figures |
 
 ### Output columns
@@ -372,6 +456,12 @@ line up row for row.
 - van der Walt, S. et al. (2014). scikit-image: image processing in Python.
   *PeerJ* 2:e453.
 - ISO/ASTM 52930 and ISO/ASTM 52920.
+
+## Who did what
+
+See [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md), which also records the two
+disagreements between the group's three independent implementations and how
+each was resolved.
 
 ## License
 

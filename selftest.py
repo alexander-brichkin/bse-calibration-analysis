@@ -86,9 +86,8 @@ def synthetic_image(ref_mm, scale, angle_deg, tx, ty,
 
 
 def recover(img, ref_mm):
-    obs = B.detect(img)[:, :2]
-    pitch, _ = B.lattice_pitch_and_angle(obs)
-    scale, rot, trans, ii, jj, resid, _ = B.register(ref_mm, obs, pitch)
+    (scale, rot, trans, ii, jj, resid, _ref, obs, _n, _p, _a,
+     _sp) = B.fit(img, ref_mm)
     angle = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
     return dict(n_detected=len(obs), n_matched=len(ii), scale=scale,
                 angle=angle, tx=trans[0], ty=trans[1],

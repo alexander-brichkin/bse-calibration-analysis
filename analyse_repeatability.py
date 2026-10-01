@@ -51,7 +51,20 @@ def main(paths, out_path="week2-repeatability.png"):
         sys.exit("need at least two deviation tables")
 
     common = sorted(set.intersection(*[set(s[1]) for s in sets]))
-    print(f"{n_img} images | spots detected in all of them: {len(common)}")
+
+    # A spot recovered by the second pass is measured with a window centroid
+    # instead of a blob centroid. Two estimators have two different scatters,
+    # so mixing them inflates the random term and washes out the systematic
+    # one. The variance split uses only spots the detector itself found in
+    # every image; the recovered ones are counted but not pooled.
+    n_all = len(common)
+    if all("detected" in s[2].dtype.names for s in sets):
+        common = [r for r in common
+                  if all(t["detected"][idx[r]] > 0.5 for _, idx, t in sets)]
+    n_rec = n_all - len(common)
+    print(f"{n_img} images | matched in all of them: {n_all}"
+          f" | measured by the detector in all of them: {len(common)}"
+          f" ({n_rec} recovered by the second pass, excluded from the split)")
 
     # (N, M, 2) stack of deviation vectors, micrometres
     dev = np.array([[[t["dx_um"][idx[r]], t["dy_um"][idx[r]]] for r in common]

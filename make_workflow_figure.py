@@ -46,10 +46,9 @@ def main(img_path, out_path="week2-workflow.png"):
     big = np.flatnonzero(sizes >= B.MIN_SPOT_PX)
     bw = ndi.binary_fill_holes(np.isin(lab, big[big != 0]))
 
-    obs = B.detect(img)[:, :2]
     ref_mm, _, _ = B.load_reference("reference_spots.csv")
-    pitch, _ = B.lattice_pitch_and_angle(obs)
-    scale, rot, trans, ii, jj, _, ref = B.register(ref_mm, obs, pitch)
+    (scale, rot, trans, ii, jj, _r, ref, obs, _n, pitch, _a,
+     _sp) = B.fit(img, ref_mm)
     pred = (scale * (rot @ ref.T).T) + trans
 
     sl = (slice(Y0, Y0 + SIZE), slice(X0, X0 + SIZE))

@@ -45,9 +45,8 @@ def main(paths, ref_path="reference_spots.csv"):
         h, w = img.shape
         cx, cy = w / 2.0, h / 2.0
 
-        obs = B.detect(img)[:, :2]
-        pitch, _ = B.lattice_pitch_and_angle(obs)
-        s, rot, t, ii, jj, resid, ref = B.register(ref_mm, obs, pitch)
+        s, rot, t, ii, jj, resid, ref, obs, _n, pitch, _a, _sp = B.fit(
+            img, ref_mm)
         um = 1000.0 / s
         pred = (s * (rot @ ref.T).T) + t
 

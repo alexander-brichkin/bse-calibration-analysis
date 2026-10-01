@@ -65,13 +65,12 @@ def measure(img, ref_mm, **kw):
     """Run the pipeline and return the measurands, or None if it collapsed."""
     det_kw = {k: v for k, v in kw.items() if k != "gate_fraction"}
     try:
-        obs = B.detect(img, **det_kw)[:, :2]
-        if len(obs) < 50:
+        (scale, rot, trans, ii, jj, resid, ref, obs, _n, pitch, _a,
+         spots) = B.fit(img, ref_mm, detect_kw=det_kw,
+                        gate_fraction=kw.get("gate_fraction",
+                                             B.GATE_FRACTION))
+        if len(spots) < 50:
             return None
-        pitch, _ = B.lattice_pitch_and_angle(obs)
-        scale, rot, trans, ii, jj, resid, ref = B.register(
-            ref_mm, obs, pitch, gate_fraction=kw.get("gate_fraction",
-                                                     B.GATE_FRACTION))
         if len(ii) < 50:
             return None
     except Exception:                                      # noqa: BLE001

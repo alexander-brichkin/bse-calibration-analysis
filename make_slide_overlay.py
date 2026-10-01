@@ -26,9 +26,8 @@ X0, Y0, SIZE = 330, 330, 180
 def main(img_path, out_path="week2-slide-overlay.png"):
     img = io.imread(img_path)
     ref_mm, origin, _ = B.load_reference("reference_spots.csv")
-    obs = B.detect(img)[:, :2]
-    pitch, _ = B.lattice_pitch_and_angle(obs)
-    scale, rot, trans, ii, jj, resid, ref = B.register(ref_mm, obs, pitch)
+    (scale, rot, trans, ii, jj, resid, ref, obs, _n, pitch, _a,
+     _sp) = B.fit(img, ref_mm)
     um = 1000.0 / scale
     pred = (scale * (rot @ ref.T).T) + trans
     dev = np.hypot(*resid.T) * um

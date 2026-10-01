@@ -47,8 +47,11 @@ def spot_field(path, ref_mm):
     """Normalised spot area as a function of position on the plate, in mm."""
     spots = B.detect(io.imread(path), **RELAXED)
     obs, area, ecc = spots[:, :2], spots[:, 3], spots[:, 4]
-    pitch, _ = B.lattice_pitch_and_angle(obs)
-    scale, rot, trans, ii, jj, _, _ = B.register(ref_mm, obs, pitch)
+    pitch, angle = B.lattice_pitch_and_angle(obs)
+    # No second pass here: the recovered points have a position but no area,
+    # and this function measures area against position.
+    scale, rot, trans, ii, jj, _, _ = B.register(ref_mm, obs, pitch,
+                                                 angle_deg=angle)
     plate = ((rot.T @ (obs - trans).T).T / scale) * np.array([1, -1])
     return plate, area / area.mean(), ecc, scale
 
@@ -106,20 +109,31 @@ def main(flat_paths, test_paths, out_path="week3-tilt-analysis.png"):
     fig, ax = plt.subplots(1, 2, figsize=(14, 5.4))
 
     lim = max(np.hypot(*g) for g in grads.values()) * 100 * 1.25
+    # One colour per image, used in BOTH panels. Reusing a colour for a
+    # different image between the two halves of one figure is how a reader
+    # ends up comparing the wrong curves.
+    palette = {}
+    for i, n in enumerate(flats):
+        palette[n] = ["#9aa8ae", "#7d8f9a", "#53656e"][i % 3]
+    for i, n in enumerate(tests):
+        palette[n] = ["#b03030", "#8e44ad", "#c1660d", "#0a7e92"][i % 4]
+
     ax[0].axhline(0, color="#dddddd", lw=.8, zorder=0)
     ax[0].axvline(0, color="#dddddd", lw=.8, zorder=0)
     for n in flats:
         v = grads[n] * 100
         ax[0].annotate("", xy=v, xytext=(0, 0),
-                       arrowprops=dict(arrowstyle="->", color="#9aa8ae", lw=2))
-        ax[0].annotate(n, xy=v, fontsize=8, color="#5A6C74")
+                       arrowprops=dict(arrowstyle="->", color=palette[n],
+                                       lw=2))
+        ax[0].annotate(n, xy=v, fontsize=8, color=palette[n])
     bv = baseline * 100
     ax[0].annotate("", xy=bv, xytext=(0, 0),
                    arrowprops=dict(arrowstyle="->", color="#16232B", lw=2.6))
     ax[0].annotate("flat baseline", xy=bv, fontsize=9, fontweight="bold")
     circle = plt.Circle(bv, floor * 100, color="#16232B", alpha=.08)
     ax[0].add_patch(circle)
-    for n, c in zip(tests, ["#0a7e92", "#b03030", "#8e44ad", "#c1660d"]):
+    for n in tests:
+        c = palette[n]
         v = grads[n] * 100
         ax[0].annotate("", xy=v, xytext=(0, 0),
                        arrowprops=dict(arrowstyle="->", color=c, lw=2.4))
@@ -131,8 +145,8 @@ def main(flat_paths, test_paths, out_path="week3-tilt-analysis.png"):
     ax[0].set_title("where the spot-area gradient points\n"
                     "shaded circle = flat-to-flat scatter", fontsize=11)
 
-    for n, c in zip(flats + tests,
-                    ["#9aa8ae", "#9aa8ae", "#0a7e92", "#b03030", "#8e44ad"]):
+    for n in flats + tests:
+        c = palette[n]
         plate, area, _, _ = data[n]
         excess = grads[n] - baseline
         if np.hypot(*excess) < 1e-12:
