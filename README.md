@@ -24,6 +24,7 @@ image, with the detected spot centres (green). Origin at the image centre.
 
 ![Flat plate 1](docs/BSE_1-registration.png)
 ![Flat plate 2](docs/BSE_2-registration.png)
+![Flat plate 3](docs/BSE_3-registration.png)
 
 The four panels of the workflow, on one region of one plate — original,
 background removed, identified geometry, registered overlay:
@@ -93,6 +94,8 @@ Five images: three flat plates and two tilted ones.
   0.0007° and 0.02 px, under clean, low-contrast, noisy, blurred and strongly
   shaded conditions.
 
+![The programmed reference pattern and its scale](docs/week1-reference-pattern.png)
+
 ### Two defects found in the supplied reference
 
 **Its millimetre columns are wrong by 0.25 %.** They assume a round
@@ -154,6 +157,7 @@ noise.
 
 ![Spot geometry across the plate](docs/week3-tilt-analysis.png)
 ![Tilted plate A](docs/TILT_A-registration.png)
+![Tilted plate B](docs/TILT_B-registration.png)
 
 **Foreshortening is not a tilt signature in this system.** One expects a tilted
 plane to be compressed along the tilt axis, giving an anisotropic scale. The
@@ -194,8 +198,11 @@ images. Tilt degrades focus, not the coordinate check.
 
 ## Robustness
 
+![Robustness sweep](docs/week4-robustness.png)
+
 `robustness.py` re-runs the whole pipeline on a real snapshot under controlled
-degradations and parameter changes, one at a time. Two criteria are kept apart
+degradations and parameter changes, one at a time. Of 61 runs, 44 stayed inside
+both limits and 52 remained accurate on whatever spots survived. Two criteria are kept apart
 on purpose: **completeness** (are the spots still there — 95 % of what a clean
 run finds) and **accuracy** (is the fit built from whatever survived still
 right — pixel size within 0.1 %, angle within 0.05°). Both thresholds are a

@@ -123,6 +123,22 @@ def deg_geometry(g, angle_deg, shift_px):
 
 # ------------------------------------------------------------------- main
 
+def plot_only(csv_path="week4-robustness.csv",
+              out_path="week4-robustness.png"):
+    """Redraw the figure from a finished sweep, without re-running it."""
+    rows = []
+    with open(csv_path) as fh:
+        for r in csv.DictReader(fh):
+            for k in ("value", "retained", "pixel_err_pct", "angle_err_deg",
+                      "rms_um"):
+                r[k] = float(r[k]) if r[k] not in ("", None) else np.nan
+            for k in ("complete", "accurate", "reliable"):
+                r[k] = r[k] == "True"
+            rows.append(r)
+    draw(rows, out_path)
+    print("written:", out_path)
+
+
 def main(img_path="bse-snapshot-img2.png", ref_path="reference_spots.csv"):
     g0 = grey(io.imread(img_path))
     ref_mm, _, _ = B.load_reference(ref_path)
@@ -215,6 +231,16 @@ def main(img_path="bse-snapshot-img2.png", ref_path="reference_spots.csv"):
                 else ("" if isinstance(r[c], float) else r[c])
                 for c in cols])
 
+    draw(rows)
+
+    n_ok = sum(r["reliable"] for r in rows)
+    n_acc = sum(r["accurate"] for r in rows)
+    print(f"\n{n_ok} of {len(rows)} runs were both complete and accurate; "
+          f"{n_acc} stayed accurate on whatever spots survived")
+    print("written: week4-robustness.csv, week4-robustness.png")
+
+
+def draw(rows, out_path="week4-robustness.png"):
     families = ["contrast", "noise", "blur", "background", "occlusion",
                 "bg_size", "min_spot_px", "max_ecc", "gate"]
     fig, axes = plt.subplots(3, 3, figsize=(15, 10))
@@ -233,24 +259,27 @@ def main(img_path="bse-snapshot-img2.png", ref_path="reference_spots.csv"):
         ax2.axhline(MAX_PIXEL_ERR_PCT, color="#b03030", lw=0.8, ls=":")
         ax2.set_ylabel("|pixel err|, %", color="#b03030")
         ax2.set_yscale("symlog", linthresh=0.01)
+        # Mark the runs that failed rather than shading a span. A swept
+        # parameter usually fails only at one end, so shading from the first
+        # failure to the end of the axis paints most of a perfectly good range
+        # as unreliable.
         bad = [r for r in sel if not r["reliable"]]
         if bad:
-            ax.axvspan(min(r["value"] for r in bad), max(x), color="#c1660d",
-                       alpha=0.08)
+            ax.plot([r["value"] for r in bad],
+                    [100 * r["retained"] for r in bad], "x", color="#c1660d",
+                    ms=9, mew=2, zorder=5, label="outside the limits")
         ax.set_title(fam, fontsize=11)
         ax.grid(alpha=0.2)
     fig.suptitle("MT035A Week 4 - robustness: where each measurand starts to "
                  "move, and where the method stops being reliable", fontsize=13)
     fig.tight_layout()
-    fig.savefig("week4-robustness.png", dpi=120, bbox_inches="tight",
+    fig.savefig(out_path, dpi=120, bbox_inches="tight",
                 metadata={"Software": None})
-
-    n_ok = sum(r["reliable"] for r in rows)
-    n_acc = sum(r["accurate"] for r in rows)
-    print(f"\n{n_ok} of {len(rows)} runs were both complete and accurate; "
-          f"{n_acc} stayed accurate on whatever spots survived")
-    print("written: week4-robustness.csv, week4-robustness.png")
+    plt.close(fig)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    if "--plot-only" in sys.argv:
+        plot_only()
+    else:
+        main(*[a for a in sys.argv[1:3] if not a.startswith("--")])
