@@ -12,8 +12,23 @@ on who is doing it. This code does it automatically and returns numbers you can
 trend.
 
 Written for the group project in **MT035A, Additive Manufacturing in Metal,
-Mid Sweden University, HT2026**. Course-mates: clone it, drop the course files
+Mid Sweden University, HT2026**. Course-mates: clone it, drop the course images
 in, run `./run_all.sh`.
+
+---
+
+## Does the registration hold up?
+
+The programmed pattern after the fitted transform (red), on the untouched BSE
+image, with the detected spot centres (green). Origin at the image centre.
+
+![Flat plate 1](docs/BSE_1-registration.png)
+![Flat plate 2](docs/BSE_2-registration.png)
+
+The four panels of the workflow, on one region of one plate — original,
+background removed, identified geometry, registered overlay:
+
+![Workflow](docs/week2-workflow.png)
 
 ---
 
@@ -24,8 +39,6 @@ Given a BSE snapshot and the programmed pattern, it fits
 ```
 [x', y'] = s · R(θ) · [x, y] + [tx, ty]
 ```
-
-and reports:
 
 | measurand | where it comes from |
 |---|---|
@@ -40,199 +53,285 @@ anisotropic scale, a shear, perspective from a tilted plate, barrel or
 pincushion distortion, or a per-spot placement error — all of which therefore
 stay in the residual, which is exactly where the distortion measure comes from.
 A richer model would absorb the defect into the fit and make the machine look
-better than it is.
+better than it is. `bse_register.py` also reports a six-parameter affine fit as
+a standing diagnostic, so the question of whether the extra freedom is needed is
+answered by the data: anisotropy is 0.07–0.12 % and shear under 0.05° on every
+image measured, so it is not.
 
 ---
 
-## Quick start
+## Results
+
+Five images: three flat plates and two tilted ones.
+
+| image | detected | matched | pixel size | Δθ (mod 90°) | residual RMS | affine anisotropy |
+|---|---|---|---|---|---|---|
+| flat 1 | 1282 | 1272 | 99.969 µm | −0.0119° | 51.0 µm | +0.121 % |
+| flat 2 | 1441 | 1441 | 99.977 µm | −0.0090° | 47.8 µm | +0.087 % |
+| flat 3 | 1456 | 1444 | 99.783 µm | +0.0553° | 49.6 µm | +0.114 % |
+| tilted A | 1472 | 1472 | 99.987 µm | −0.0112° | 48.3 µm | +0.065 % |
+| tilted B | 1586 | 1585 | 100.035 µm | −0.0031° | 42.0 µm | +0.093 % |
+
+### Why the registration can be believed
+
+- **Independent images agree on the scale to better than 0.1 %.** Nothing in
+  the pipeline takes a pixel size as input; it falls out of fitting a 2.000 mm
+  lattice to the observed spots. The first two flats agree to 82 ppm.
+- **All five land within 0.25 % of a round 100 µm/px**, which is what a
+  hardware setting would be. We did not tune anything towards that number.
+- **The residual is far below one lattice step.** A median of 36 µm against a
+  2000 µm pitch is 1.8 %. Had any spot been matched to the wrong lattice node
+  it would deviate by close to 2000 µm; the largest deviation anywhere is
+  353 µm.
+- **A second, independently written pipeline agrees.** Run with its own
+  calibration disabled, a course-mate's separate implementation gives
+  10.006 / 10.003 / 10.026 px/mm where this one gives 10.003 / 10.002 / 10.022
+  — agreement to 0.04 %. The two codebases also agree on the reference lattice
+  pitch to 4 × 10⁻⁵ (35.9109 px here, 35.9122 px there).
+- **`selftest.py` recovers a transform it was given.** On synthetic data with a
+  known scale, rotation and shift the pipeline returns them to 0.004 %,
+  0.0007° and 0.02 px, under clean, low-contrast, noisy, blurred and strongly
+  shaded conditions.
+
+### Two defects found in the supplied reference
+
+**Its millimetre columns are wrong by 0.25 %.** They assume a round
+18.000 px/mm, while the lattice actually sits at 35.9109 px, i.e.
+17.9555 px/mm. Taking them at face value stretches the pattern by 0.25 % and
+puts that error straight into the derived pixel size. `load_reference()`
+therefore ignores those columns and re-derives millimetres from the pixel
+columns against the nominal pitch. Two checks confirm it: the field then
+measures exactly 88.000 mm (44 steps × 2.000 mm), and the derived BSE pixel
+size moves from 99.72 µm to 99.97 µm — 0.03 % from a round 100 µm/px instead
+of 0.28 %.
+
+**Its coordinates are quantised to whole pixels.** Every marker centre is an
+integer, so nearest-neighbour distances take only the values 35 and 36 px and
+never the true 35.911. That is ±0.5 px = ±28 µm, about 16 µm per axis — a floor
+under any deviation measured against this pattern, and roughly half the
+variance of the random component below.
+
+A third, already known: the spot diameter is identical for all 1597 spots, so
+it is a plotting marker and not a physical size. Shape descriptors must never
+be compared against it.
+
+### Note on the nominal pitch
+
+Nothing in the supplied material states the lattice pitch. 2.000 mm is an
+**inference**, and it is declared as one. What supports it: the lattice measures
+35.911 px; at the stated 18 px/mm that is 1.9950 mm and the 44-step field is
+87.78 mm, while at 2.000 mm the field is exactly 88.000 mm and the derived BSE
+pixel size lands on a round 100 µm/px. Two independent numbers go round if the
+pitch is 2.000 and neither does otherwise. It remains circumstantial; a caliper
+across the melted pattern settles it — 88.0 mm against 85.9 mm is the test.
+
+---
+
+## Systematic or random?
+
+A single image cannot tell: any residual left after a fit looks like a pattern.
+Several independent snapshots can, because a machine-caused deviation repeats
+while detection noise does not.
+
+![Systematic versus random](docs/week2-repeatability.png)
+
+| | over 2 flats | over 3 flats |
+|---|---|---|
+| systematic | 32.5 µm | 25.4 µm |
+| random | 35.5 µm | 39.6 µm |
+
+Of the random part, about 16 µm per axis is the reference file's pixel
+quantisation, leaving roughly 17–22 µm of genuine detection noise.
+
+**Consequence for a limit.** A single image cannot resolve a drift below about
+35 µm. Averaging N images pulls that floor down as 1/√N while the systematic
+part stays put. Any warning limit tighter than that floor is measuring our own
+noise.
+
+---
+
+## The tilted plate
+
+![Spot geometry across the plate](docs/week3-tilt-analysis.png)
+![Tilted plate A](docs/TILT_A-registration.png)
+
+**Foreshortening is not a tilt signature in this system.** One expects a tilted
+plane to be compressed along the tilt axis, giving an anisotropic scale. The
+measurement says otherwise: the tilted plates show *less* anisotropy
+(0.065 %, 0.093 %) than the flat ones (0.121 %, 0.087 %). The reason is the
+same fact the whole project rests on — the beam is deflected to a commanded
+(x, y) and the BSE image is formed by the same deflection, so both the writing
+and the reading use the same in-plane coordinates. Tilt changes the working
+distance, that is the focus, not the geometry. Any tilt estimate has to come
+from focus.
+
+**A flat plate already varies.** Spot area has a directional gradient of
+0.37–0.47 %/mm on a flat plate, because the BSE detector sits to one side. That
+is the same order as the tilt effect, so a raw gradient separates nothing — one
+flat plate's raw gradient (0.467 %/mm) exceeds a tilted plate's (0.448 %/mm).
+The flats are therefore used as a baseline and subtracted:
+
+| plate | excess gradient over the flat baseline | against the flat-to-flat scatter |
+|---|---|---|
+| tilted A | 0.241 %/mm | 2.4× |
+| tilted B | 0.284 %/mm | 2.8× |
+| flat 3 | 0.358 %/mm | 3.5× |
+| flats | 0.102 %/mm | 1.0× |
+
+**No tilt angle is reported.** Converting %/mm of spot area into degrees needs
+the beam's depth-of-focus characteristic — how spot area grows per millimetre
+of working-distance error — which the supplied data does not contain. What the
+data supports is a focus gradient across the plate, consistent with a tilt, of
+the magnitudes above.
+
+Two things worth flagging. The plate labelled *flat 3* shows the **largest**
+excess of all, larger than either tilted plate, so its provenance is worth
+checking. And the positional measurement is untroubled by tilt: the tilted
+plates register normally, one of them with the lowest residual of all five
+images. Tilt degrades focus, not the coordinate check.
+
+---
+
+## Robustness
+
+`robustness.py` re-runs the whole pipeline on a real snapshot under controlled
+degradations and parameter changes, one at a time. Two criteria are kept apart
+on purpose: **completeness** (are the spots still there — 95 % of what a clean
+run finds) and **accuracy** (is the fit built from whatever survived still
+right — pixel size within 0.1 %, angle within 0.05°). Both thresholds are a
+proposal, not values given in the data. An occlusion removes spots by
+construction, so it fails completeness while staying accurate; that distinction
+matters for a limit.
+
+| variation | reliable to | first failure | what fails first |
+|---|---|---|---|
+| contrast compression | **12× reduction** | never in range | — |
+| additive noise | σ = 10 grey levels | σ = 20 | completeness (94 %) |
+| blur | σ = 4 px | σ = 6 | completeness (37 %) |
+| background ramp | 90 grey levels | 120 | pipeline collapses |
+| background filter width | 17–61 px | 11 px | completeness (87 %) |
+| minimum blob area | 2–64 px | never in range | — |
+| eccentricity limit | 0.70–0.99 | 0.55 | pipeline collapses |
+| match gate | 0.45–0.75 × pitch | 0.30 | pipeline collapses |
+
+**Contrast is a non-issue** — compressing grey values twelvefold changes
+nothing, because the flatten-and-subtract step normalises the background away
+before Otsu sees the image. **Noise is the tightest constraint.** **Parameter
+choices are not delicate**: the background filter can vary from 17 to 61 px and
+the minimum blob area 32-fold without moving the pixel size by 0.01 %.
+
+**A real weakness, found by this test.** Applying a *known* rotation and asking
+the fit to recover it: below about 2° it comes back to a thousandth of a
+degree; at 5° the fit fails while still reporting a plausible-looking angle,
+because ICP starts from the identity rotation and the outer spots are displaced
+by more than the half-pitch gate. The matched fraction is what gives it away —
+it drops to 65 %. That is why the matched fraction is the first number to read.
+
+---
+
+## Proposed quality-assurance routine
+
+*Limits are a proposal. None are given in the data.*
+
+**When.** After any beam-calibration change, after a column or detector
+service, and as a scheduled monthly check. Repeat at two heights when the build
+envelope is used fully.
+
+**Retain.** The raw BSE image, the reference file and its version, the software
+version and parameter set, the per-spot deviation table, and the one-line fit
+summary. That is what makes a past result re-auditable.
+
+**Trend.** Derived pixel size, Δθ, ΔX/ΔY, residual RMS and 95th percentile, and
+the matched-spot fraction — per machine, as a control chart, not pass/fail on a
+single reading.
+
+**Limits (proposed).** Warn at residual RMS above 75 µm or a matched fraction
+below 95 % of the machine's own baseline. Act at RMS above 120 µm, |Δθ| above
+0.05°, or a pixel-size shift above 0.3 % from the trend.
+
+**Act.** Re-image first — half the deviation is measurement noise. If it
+repeats, re-run beam calibration and re-measure. If the pixel size has moved,
+suspect imaging geometry rather than the beam. If too few spots match, fix
+image quality first, because every other number is then unreliable.
+
+---
+
+## What it cannot verify
+
+A finished part being dimensionally correct — a flat plate is not a part.
+Anything about melt-pool behaviour, layer bonding, porosity or microstructure.
+The Z axis, powder spreading or thermal history. This is a single-layer,
+in-plane geometric check.
+
+**Complementary control.** A physically measured artefact: built, then verified
+off-machine by CMM or CT against known nominal dimensions. That closes the loop
+the pattern cannot — registration against the machine's own BSE image cannot
+detect a deflection-gain error at all, because the same deflection writes the
+pattern and scans the image, so such an error cancels in the machine's own
+coordinates. Only an external physical reference reveals it.
+
+---
+
+## Running it
 
 ```bash
-git clone <this repo>
-cd bse-calibration-analysis
-
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-python3 selftest.py
+python3 selftest.py        # synthetic ground truth, no course data needed
 ```
 
-`selftest.py` needs **no course data**. It builds a synthetic calibration
-pattern and a synthetic BSE image with a transform it already knows, then
-checks the pipeline recovers it:
-
-```
-synthetic pattern: 1517 spots, 2.0 mm pitch
-ground truth: scale 10.0 px/mm, angle 0.35 deg, shift (451.0, 448.0) px
-
-  [PASS] clean                        matched 1485/1517 (97.9%) | scale err 0.001 % | angle err 0.0000 deg | shift err 0.00 px
-  [PASS] low contrast (0.18)          matched 1486/1517 (98.0%) | scale err 0.004 % | angle err 0.0004 deg | shift err 0.00 px
-  [PASS] noisy (sigma 0.06)           matched 1479/1517 (97.5%) | scale err 0.004 % | angle err 0.0001 deg | shift err 0.02 px
-  [PASS] blurred (sigma 1.5 px)       matched 1496/1517 (98.6%) | scale err 0.004 % | angle err 0.0007 deg | shift err 0.00 px
-  [PASS] strong background gradient   matched 1484/1517 (97.8%) | scale err 0.002 % | angle err 0.0004 deg | shift err 0.01 px
-  [soft] low contrast + noisy         matched   29/1517 ( 1.9%) | scale err 110.496 %
-```
-
-If that prints `ALL CHECKS PASSED`, the install is good. The last row is
-deliberately degraded past the point where the method should be trusted — note
-how the failure announces itself: the matched fraction collapses to 2 %. That
-is the reliability criterion. **Never read the deviation numbers without
-reading the matched fraction first.**
-
----
-
-## Running it on real data
-
-The course files are not in this repository — they belong to the teaching team.
-Put them in the repository root (they are already in `.gitignore`):
-
-```
-pattern_image.png          the programmed reference pattern, as supplied
-reference_spots.csv        the Week-1 spot table extracted from it
-bse-snapshot-*.png         the flat-plate BSE snapshots
-```
-
-Then:
+The course images are not in this repository — they belong to the teaching
+team. Put them in the root (they are in `.gitignore`) and:
 
 ```bash
-./run_all.sh                                  # every bse-snapshot-*.png
-./run_all.sh bse-snapshot-img1.png            # or the ones you name
+./run_all.sh                       # every bse-snapshot-*.png in the folder
+./run_all.sh image1.png image2.png # or the ones you name
 ```
 
-`run_all.sh` processes each snapshot, merges the results, and cross-checks the
-orientation of the first two. About 5 s per image.
-
-### One image at a time
-
-```bash
-python3 bse_register.py bse-snapshot-img1.png [reference_spots.csv]
-```
-
-prints the fit and writes, next to the image:
-
-- `…-overlay.png` — the verification figure: programmed pattern drawn on the
-  snapshot, a zoom, the residual vector field, the residual histogram, the
-  numbers
-- `…-deviations.csv` — one row per matched spot
-- `…-summary.csv` — one row with the global fit
-
-### The other scripts
-
-| command | what it does |
+| script | what it does |
 |---|---|
-| `python3 analyse_repeatability.py A-deviations.csv B-deviations.csv` | splits the deviation into a systematic and a random part by comparing two snapshots |
-| `python3 check_orientation.py A.png B.png` | decides whether two snapshots are in the same orientation (the lattice alone cannot tell) |
-| `python3 make_reference_figure.py` | redraws the Week-1 reference figure |
-| `python3 make_workflow_figure.py bse-snapshot-img2.png` | original → processed → identified → overlay, on one region |
-| `python3 make_slide_overlay.py bse-snapshot-img2.png` | a wide three-panel overlay laid out for a 16:9 slide |
+| `bse_register.py` | detection, registration, every measurand, affine diagnostic |
+| `make_registration_overlay.py` | the overlay above, plus a per-spot table |
+| `analyse_repeatability.py` | systematic versus random, over any number of images |
+| `focus_profile.py` | spot area, diameter and eccentricity against radius |
+| `tilt_analysis.py` | tilt against a flat-plate baseline |
+| `check_orientation.py` | resolves the 90° lattice ambiguity |
+| `robustness.py` | controlled degradations and parameter sweeps |
+| `selftest.py` | synthetic ground-truth check |
+| `make_reference_figure.py`, `make_workflow_figure.py`, `make_slide_overlay.py` | figures |
 
----
+### Output columns
 
-## Output columns
+`<image>-deviations.csv`, one row per matched spot: `ref_idx`, `obs_idx`,
+`ref_x_mm`, `ref_y_mm`, `pred_x_px`, `pred_y_px`, `obs_x_px`, `obs_y_px`,
+`obs_x_mm`, `obs_y_mm` (observed centre in the BSE image's **own**
+calibration), `dx_um`, `dy_um`, `dist_um`, `radius_mm`, `dev_radial_um`,
+`dev_tangential_um`.
 
-`…-deviations.csv`, one row per matched spot:
+`<image>-summary.csv`, one row per image, adds the affine diagnostic.
 
-| column | meaning |
-|---|---|
-| `ref_idx`, `obs_idx` | row in the reference table / index of the detected spot |
-| `ref_x_mm`, `ref_y_mm` | programmed position, mm, relative to the reference spot |
-| `pred_x_px`, `pred_y_px` | where the fit says that spot should appear |
-| `obs_x_px`, `obs_y_px` | where it actually is |
-| `obs_x_mm`, `obs_y_mm` | observed centre in mm **in the BSE image's own calibration**, origin on the BSE reference spot |
-| `dx_um`, `dy_um` | the local deviation vector |
-| `dist_um` | its magnitude |
-| `radius_mm` | distance from the centre of the field |
-| `dev_radial_um` | component pointing away from the centre (+ outward) |
-| `dev_tangential_um` | component perpendicular to it (+ counter-clockwise) |
-
-`…-summary.csv`, one row per image: `spots_detected`, `matched_pairs`,
-`reference_points`, `lattice_pitch_px`, `scale_px_per_mm`, `pixel_size_um`,
-`rotation_deg_mod90`, `dx_px`, `dy_px`, `rms_um`, `median_um`, `p95_um`,
-`max_um`.
-
----
-
-## How it works
-
-1. **Isolate the plate** — threshold, fill holes, keep the largest component,
-   erode by 12 px so the bright rim is excluded.
-2. **Flatten the background** — BSE grey level follows atomic number, local
-   tilt and topography, so the background drifts across the field and one
-   global threshold fails. A 25 px median filter estimates it; subtracting
-   leaves a flat map where Otsu behaves.
-3. **Segment** — Otsu on the flattened map, drop blobs under 8 px, fill holes.
-4. **Filter by shape** — keep blobs with an area 0.3–4× the median and
-   eccentricity below 0.85. Scratches, rim fragments and merged pairs go.
-5. **Centroid** — the spot centre is the centroid of the segmented area.
-6. **Seed** — measure the lattice pitch from nearest-neighbour distances and
-   use pitch / 2.000 mm as the starting scale.
-7. **Register** — Umeyama's closed-form least-squares similarity fit, iterated
-   ICP-style 30 times. Matching is mutually-nearest-neighbour inside a gate of
-   0.45 × pitch, i.e. below half a lattice step, so a spot cannot lock onto its
-   neighbour.
-8. **Measure** — ΔX, ΔY, Δθ and s come from the fit; what is left over is the
-   local distortion.
-
-### Two things worth knowing before you trust a number
-
-**The millimetre columns of a reference table may be wrong.** In our course
-file they were written assuming a round 18.000 px/mm, while the lattice
-actually sits at 35.911 px (17.9555 px/mm) — a 0.25 % stretch that lands
-straight in the derived pixel size. `load_reference()` therefore ignores those
-columns and re-derives millimetres from the pixel columns against the nominal
-`PITCH_MM`. Two checks confirmed this: the field then measures exactly
-88.000 mm (44 steps × 2.000 mm), and the derived BSE pixel size moves to within
-0.03 % of a round 100 µm/px instead of 0.28 %.
-
-**The rotation is only defined modulo 90°.** A square lattice is 4-fold
-symmetric, so the fit returns −90.01° and −0.01° with identical matches and
-identical residuals. Use `check_orientation.py`, or key the orientation off a
-marked reference spot.
-
----
-
-## What we measured with it
-
-Two flat-plate BSE snapshots, 897 × 899 px:
-
-| | img1 | img2 |
-|---|---|---|
-| spots detected / matched | 1282 / 1272 | 1441 / 1441 |
-| derived pixel size | 99.969 µm | 99.977 µm |
-| Δθ (mod 90°) | −0.0119° | −0.0090° |
-| residual RMS | 51.0 µm | 47.8 µm |
-| median / 95th / max | 36 / 93 / 353 µm | 37 / 86 / 264 µm |
-
-Two independent images agreeing on the pixel size to 82 ppm, and both landing
-0.03 % from a round 100 µm/px, is the main reason to believe the fit — nothing
-in the pipeline takes a pixel size as input.
-
-Comparing the two images spot by spot splits the deviation into a part that
-repeats (systematic, 32.5 µm) and a part that does not (random, 35.5 µm). About
-16 µm per axis of the random part is pixel quantisation in the supplied
-reference file, not the machine. So a single image cannot resolve a drift below
-roughly 35 µm; averaging N images pulls that floor down as 1/√N while the
-systematic part stays put.
+`<image>-matched_spot_residuals.csv` carries the same per-spot data in the
+column order the rest of the group is using, so tables from different pipelines
+line up row for row.
 
 ---
 
 ## Limitations
 
-- Validated on two real snapshots and a synthetic set. Not a qualified
-  measurement procedure.
-- The derived pixel size rests on the nominal lattice pitch being true. If the
-  programmed pitch is wrong, the scale is wrong by the same factor.
+- Three flat plates and two tilted ones. Not a qualified measurement procedure.
+- The derived pixel size rests on the nominal lattice pitch being true, which
+  is inferred and not stated anywhere in the supplied material.
 - Spots near the rim are measured less reliably — contrast falls off and some
   are clipped by the erosion margin. Part of the growth of the residual towards
   the edge is probably this, not the machine.
-- Registering a calibration pattern successfully does **not** qualify a PBF-EB
-  process. It says nothing about melt-pool behaviour, porosity, layer bonding,
-  the Z axis or powder spreading. It is a single-layer, in-plane geometric
-  check and needs a physically measured artefact alongside it.
+- The fit must not be trusted on an image rotated more than about 2° from the
+  reference until the initialisation is seeded from the measured lattice angle.
+- `check_orientation.py` reports INCONCLUSIVE when the four quarter turns score
+  within 20 % of each other, which they do for images of very different
+  character. Use the marked reference spot to fix orientation instead.
 
----
-
-## Method sources
+## Sources
 
 - Umeyama, S. (1991). Least-squares estimation of transformation parameters
   between two point patterns. *IEEE TPAMI* 13(4), 376–380.
@@ -242,11 +341,9 @@ systematic part stays put.
   *IEEE Trans. SMC* 9(1), 62–66.
 - van der Walt, S. et al. (2014). scikit-image: image processing in Python.
   *PeerJ* 2:e453.
-- ISO/ASTM 52930 (installation, operation and performance qualification) and
-  ISO/ASTM 52920 (requirements for industrial additive manufacturing
-  processes).
+- ISO/ASTM 52930 and ISO/ASTM 52920.
 
 ## License
 
 MIT — see [LICENSE](LICENSE). The course data is not covered by it and is not
-included here.
+included here; the figures above are our own analysis output.

@@ -7,6 +7,9 @@ bse-snapshot-*.png
 data/*
 !data/README.md
 
+# Figures published with the README are kept; everything else generated is not
+!docs/*.png
+
 # Generated output
 *-overlay.png
 *-deviations.csv
