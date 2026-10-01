@@ -169,6 +169,16 @@ and the reading use the same in-plane coordinates. Tilt changes the working
 distance, that is the focus, not the geometry. Any tilt estimate has to come
 from focus.
 
+The left panel shows where each image's spot-area gradient points: the two
+flats sit inside the circle of their own scatter, both tilted plates and the
+plate labelled flat 3 fall outside it. The right panel follows spot area along
+each image's own departure direction — the tilted plates trend monotonically,
+the flats wander. A radial average, which is the obvious thing to plot, hides
+all of this, because a tilt is directional and averaging over angle destroys
+exactly the signal. (TILT_A trends downward rather than upward because its raw
+gradient points nearly opposite to its excess: its departure from the baseline
+is a weakening in the baseline's own direction.)
+
 **A flat plate already varies.** Spot area has a directional gradient of
 0.37–0.47 %/mm on a flat plate, because the BSE detector sits to one side. That
 is the same order as the tilt effect, so a raw gradient separates nothing — one
@@ -200,6 +210,18 @@ images. Tilt degrades focus, not the coordinate check.
 
 ![Robustness sweep](docs/week4-robustness.png)
 
+Four things in this figure are worth reading carefully, because the first
+version of it got all four wrong. Rotation was missing from the panels
+altogether, and it is the only variation that moves the measurand by more than
+a hundredth of a percent. Six runs found no spots at all; they have no pixel
+size, so plotting a zero error for them turned total failure into a perfect
+score — they now carry a marker on the axis and no red point. Shading a span
+from the first failure to the edge of the axis condemned whole usable ranges,
+so failing runs are marked one at a time. And retention above 100 % is real,
+not a bug: mild blur and reduced contrast round the blobs, so **more** of them
+pass the shape filter than in the clean run — the clean run is not the best
+detection this pipeline can do.
+
 `robustness.py` re-runs the whole pipeline on a real snapshot under controlled
 degradations and parameter changes, one at a time. Of 61 runs, 44 stayed inside
 both limits and 52 remained accurate on whatever spots survived. Two criteria are kept apart
@@ -220,6 +242,7 @@ matters for a limit.
 | minimum blob area | 2–64 px | never in range | — |
 | eccentricity limit | 0.70–0.99 | 0.55 | pipeline collapses |
 | match gate | 0.45–0.75 × pitch | 0.30 | pipeline collapses |
+| known rotation | 2° | 5° | **accuracy** (0.91 % pixel size) |
 
 **Contrast is a non-issue** — compressing grey values twelvefold changes
 nothing, because the flatten-and-subtract step normalises the background away

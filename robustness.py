@@ -39,6 +39,7 @@ from skimage import io
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
 
 import bse_register as B
 
@@ -241,38 +242,112 @@ def main(img_path="bse-snapshot-img2.png", ref_path="reference_spots.csv"):
 
 
 def draw(rows, out_path="week4-robustness.png"):
-    families = ["contrast", "noise", "blur", "background", "occlusion",
-                "bg_size", "min_spot_px", "max_ecc", "gate"]
-    fig, axes = plt.subplots(3, 3, figsize=(15, 10))
-    for ax, fam in zip(axes.ravel(), families):
+    """Redraw the sweep.
+
+    Four things this figure has to get right, because the first version of it
+    got all four wrong:
+
+    * The geometry family was simply missing from the panel list, and it is
+      the one family that moves the measurand: a 5 deg rotation costs 0.9 %
+      of pixel size, three orders of magnitude more than anything else here.
+    * A run that detects nothing has no pixel size, so there is no error to
+      plot. Drawing a zero there turns a total failure into a perfect score.
+    * A swept parameter normally fails at one end only, so shading from the
+      first failure to the edge of the axis paints most of a usable range as
+      unreliable. Failing runs are marked one by one instead.
+    * The retained fraction is measured against the clean run and goes ABOVE
+      100 %: mild blur and reduced contrast round the blobs and let more of
+      them through the shape filter. The clean run is not the best detection,
+      so the axis has to show that rather than clip it away.
+    """
+    units = {"contrast": "c", "noise": "sigma", "blur": "sigma",
+             "background": "amp", "occlusion": "frac",
+             "geometry": "rotation, deg", "bg_size": "px",
+             "min_spot_px": "px", "max_ecc": "e", "gate": "frac"}
+    nm = lambda r: int(r["n_matched"])
+    FLOOR = 1e-3
+
+    panels = []
+    for fam in units:
         sel = [r for r in rows if r["family"] == fam]
+        if fam == "geometry":
+            line = [r for r in sel if "shift0+0" in r["parameter"]]
+            extra = [r for r in sel if "shift0+0" not in r["parameter"]]
+        else:
+            line, extra = sel, []
+        panels.append((fam, sorted(line, key=lambda r: r["value"]), extra))
+
+    fig, axes = plt.subplots(2, 5, figsize=(19, 7.8))
+    for col, (ax, (fam, sel, extra)) in enumerate(zip(axes.ravel(), panels)):
         x = [r["value"] for r in sel]
         ax.plot(x, [100 * r["retained"] for r in sel], "o-", color="#0a7e92",
-                label="spots retained, %")
+                zorder=4)
+        ax.axhline(100, color="#0a7e92", lw=0.8, ls=":", alpha=0.6)
         ax.axhline(100 * MIN_RETAINED, color="#c1660d", lw=1, ls="--")
-        ax.set_ylim(-3, 103)
-        ax.set_xlabel(f"{fam}  ({sel[0]['parameter']})")
-        ax.set_ylabel("spots retained, %", color="#0a7e92")
-        ax2 = ax.twinx()
-        ax2.plot(x, [abs(r["pixel_err_pct"]) for r in sel], "s--",
-                 color="#b03030", ms=4, label="|pixel-size error|, %")
-        ax2.axhline(MAX_PIXEL_ERR_PCT, color="#b03030", lw=0.8, ls=":")
-        ax2.set_ylabel("|pixel err|, %", color="#b03030")
-        ax2.set_yscale("symlog", linthresh=0.01)
-        # Mark the runs that failed rather than shading a span. A swept
-        # parameter usually fails only at one end, so shading from the first
-        # failure to the end of the axis paints most of a perfectly good range
-        # as unreliable.
-        bad = [r for r in sel if not r["reliable"]]
-        if bad:
-            ax.plot([r["value"] for r in bad],
-                    [100 * r["retained"] for r in bad], "x", color="#c1660d",
-                    ms=9, mew=2, zorder=5, label="outside the limits")
+        ax.set_ylim(-7, 115)
+        ax.set_xlabel(f"{fam}  ({units[fam]})", fontsize=9)
         ax.set_title(fam, fontsize=11)
         ax.grid(alpha=0.2)
+        if col % 5 == 0:
+            ax.set_ylabel("spots retained, % of clean run", color="#0a7e92",
+                          fontsize=9)
+        else:
+            ax.tick_params(labelleft=False)
+
+        ax2 = ax.twinx()
+        live = [r for r in sel if nm(r) > 0 and np.isfinite(r["pixel_err_pct"])]
+        ax2.plot([r["value"] for r in live],
+                 [max(abs(r["pixel_err_pct"]), FLOOR) for r in live],
+                 "s--", color="#b03030", ms=4, zorder=3)
+        ax2.axhline(MAX_PIXEL_ERR_PCT, color="#b03030", lw=0.8, ls=":")
+        ax2.set_yscale("log")
+        ax2.set_ylim(FLOOR * 0.55, 300)
+        if col % 5 == 4:
+            ax2.set_ylabel("|pixel-size error|, %", color="#b03030",
+                           fontsize=9)
+        else:
+            ax2.tick_params(labelright=False)
+
+        # Runs that found nothing: no measurand exists, so nothing is drawn on
+        # the red axis. The x position is marked instead.
+        dead = [r for r in sel if nm(r) == 0]
+        for r in dead:
+            ax.axvline(r["value"], color="#777", lw=1, ls=":", zorder=1)
+        if dead:
+            ax.plot([r["value"] for r in dead], [0] * len(dead), "v",
+                    color="#333", ms=8, zorder=6)
+
+        # Runs that survived but fell outside the limits.
+        bad = [r for r in sel if not r["reliable"] and nm(r) > 0]
+        ax.plot([r["value"] for r in bad], [100 * r["retained"] for r in bad],
+                "x", color="#c1660d", ms=9, mew=2, zorder=7)
+
+        for r in extra:
+            ax.plot([r["value"]], [100 * r["retained"]], "D", color="#0a7e92",
+                    mfc="none", mew=1.6, ms=8, zorder=7)
+        if extra:
+            ax.set_title("geometry  (open: rotation + translation)",
+                         fontsize=10)
+
+    handles = [
+        mlines.Line2D([], [], color="#0a7e92", marker="o",
+                      label="spots retained, % of the clean run"),
+        mlines.Line2D([], [], color="#b03030", marker="s", ls="--",
+                      label="|pixel-size error|, % (log; floored at 1e-3)"),
+        mlines.Line2D([], [], color="#c1660d", marker="x", ls="none", mew=2,
+                      label=f"outside the limits (<{100*MIN_RETAINED:.0f} % "
+                            f"kept or >{MAX_PIXEL_ERR_PCT} % error)"),
+        mlines.Line2D([], [], color="#333", marker="v", ls="none",
+                      label="detection collapsed - no measurand"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=4, frameon=False,
+               fontsize=9, bbox_to_anchor=(0.5, -0.012))
     fig.suptitle("MT035A Week 4 - robustness: where each measurand starts to "
                  "move, and where the method stops being reliable", fontsize=13)
-    fig.tight_layout()
+    fig.text(0.5, 0.028, "Retention above 100 % is real: mild blur and reduced "
+             "contrast round the blobs, so more of them pass the shape filter "
+             "than in the clean run.", ha="center", fontsize=8.5, color="#444")
+    fig.tight_layout(rect=(0, 0.055, 1, 1))
     fig.savefig(out_path, dpi=120, bbox_inches="tight",
                 metadata={"Software": None})
     plt.close(fig)

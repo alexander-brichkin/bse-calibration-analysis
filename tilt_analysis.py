@@ -97,24 +97,61 @@ def main(flat_paths, test_paths, out_path="week3-tilt-analysis.png"):
           "supplied data. What the data\nsupports is a focus gradient across "
           "the plate, consistent with a tilt, with the\nmagnitudes above.")
 
-    fig, ax = plt.subplots(1, 2, figsize=(13, 5.4))
-    for n in flats + tests:
-        plate, area, ecc, _ = data[n]
-        r = np.hypot(*plate.T); r /= r.max()
-        edges = np.linspace(0, 1, 7)
+    # ---------------------------------------------------------------- figure
+    # A radial profile is the wrong display for a tilt: the effect is
+    # directional, so averaging over angle is exactly what destroys it. The
+    # two panels below show the measurement the argument actually rests on -
+    # where each image's gradient points, and the trend along the direction in
+    # which the test plates depart from the flat baseline.
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5.4))
+
+    lim = max(np.hypot(*g) for g in grads.values()) * 100 * 1.25
+    ax[0].axhline(0, color="#dddddd", lw=.8, zorder=0)
+    ax[0].axvline(0, color="#dddddd", lw=.8, zorder=0)
+    for n in flats:
+        v = grads[n] * 100
+        ax[0].annotate("", xy=v, xytext=(0, 0),
+                       arrowprops=dict(arrowstyle="->", color="#9aa8ae", lw=2))
+        ax[0].annotate(n, xy=v, fontsize=8, color="#5A6C74")
+    bv = baseline * 100
+    ax[0].annotate("", xy=bv, xytext=(0, 0),
+                   arrowprops=dict(arrowstyle="->", color="#16232B", lw=2.6))
+    ax[0].annotate("flat baseline", xy=bv, fontsize=9, fontweight="bold")
+    circle = plt.Circle(bv, floor * 100, color="#16232B", alpha=.08)
+    ax[0].add_patch(circle)
+    for n, c in zip(tests, ["#0a7e92", "#b03030", "#8e44ad", "#c1660d"]):
+        v = grads[n] * 100
+        ax[0].annotate("", xy=v, xytext=(0, 0),
+                       arrowprops=dict(arrowstyle="->", color=c, lw=2.4))
+        ax[0].annotate(n, xy=v, fontsize=9, color=c, fontweight="bold")
+    ax[0].set_xlim(-lim, lim); ax[0].set_ylim(-lim, lim)
+    ax[0].set_aspect("equal"); ax[0].grid(alpha=.25)
+    ax[0].set_xlabel("gradient along plate X, % per mm")
+    ax[0].set_ylabel("gradient along plate Y, % per mm")
+    ax[0].set_title("where the spot-area gradient points\n"
+                    "shaded circle = flat-to-flat scatter", fontsize=11)
+
+    for n, c in zip(flats + tests,
+                    ["#9aa8ae", "#9aa8ae", "#0a7e92", "#b03030", "#8e44ad"]):
+        plate, area, _, _ = data[n]
+        excess = grads[n] - baseline
+        if np.hypot(*excess) < 1e-12:
+            continue
+        unit = excess / np.hypot(*excess)
+        t = plate @ unit                      # mm along the departure direction
+        edges = np.linspace(t.min(), t.max(), 9)
         mid = 0.5 * (edges[:-1] + edges[1:])
-        style = "o--" if n in flats else "o-"
-        ax[0].plot(mid, [area[(r >= lo) & (r < hi)].mean()
-                         for lo, hi in zip(edges[:-1], edges[1:])], style, label=n)
-        ax[1].plot(mid, [ecc[(r >= lo) & (r < hi)].mean()
-                         for lo, hi in zip(edges[:-1], edges[1:])], style, label=n)
-    ax[0].set_ylabel("spot area / image mean"); ax[0].set_title("spot area", fontsize=11)
-    ax[1].set_ylabel("eccentricity"); ax[1].set_title("spot elongation", fontsize=11)
-    for a in ax:
-        a.set_xlabel("distance from plate centre, fraction of radius")
-        a.grid(alpha=.25); a.legend(fontsize=8)
-    fig.suptitle("Week 3 - spot geometry across the plate "
-                 "(dashed = flat reference plates)", fontsize=13)
+        prof = [area[(t >= lo) & (t < hi)].mean()
+                if ((t >= lo) & (t < hi)).sum() > 4 else np.nan
+                for lo, hi in zip(edges[:-1], edges[1:])]
+        ax[1].plot(mid, prof, "o--" if n in flats else "o-", color=c, label=n)
+    ax[1].set_xlabel("position along each image's own excess-gradient direction, mm")
+    ax[1].set_ylabel("spot area / image mean")
+    ax[1].grid(alpha=.25); ax[1].legend(fontsize=8)
+    ax[1].set_title("the directional trend the radial view hides", fontsize=11)
+
+    fig.suptitle("Week 3 - spot area across the plate: a tilt is directional, "
+                 "so it is measured along a direction", fontsize=13)
     fig.tight_layout()
     fig.savefig(out_path, dpi=120, bbox_inches="tight", metadata={"Software": None})
     print("\nwritten:", out_path)
