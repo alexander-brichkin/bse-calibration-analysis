@@ -47,6 +47,10 @@ import matplotlib.pyplot as plt
 
 PITCH_MM = 2.0          # nominal lattice pitch of the reference pattern, mm
 MIN_SPOT_PX = 8         # smallest blob kept before shape filtering
+BG_FILTER_PX = 25       # median-filter width used to estimate the background
+RIM_PX = 12             # how far the working area is pulled in from the rim
+AREA_LO, AREA_HI = 0.3, 4.0      # kept blob area, as a fraction of the median
+MAX_ECC = 0.85          # kept blob eccentricity
 ICP_ITERS = 30
 GATE_FRACTION = 0.45    # match radius as a fraction of the lattice pitch
 
@@ -60,11 +64,18 @@ def _disk(radius):
     return x * x + y * y <= r * r
 
 
-def detect(img):
+def detect(img, bg_size=BG_FILTER_PX, min_spot_px=MIN_SPOT_PX,
+           area_lo=AREA_LO, area_hi=AREA_HI, max_ecc=MAX_ECC, rim_px=RIM_PX):
     """Find the spots on a BSE snapshot.
 
-    Returns an (N, 4) array: centre_x_px, centre_y_px, equivalent_diameter_px,
-    area_px. Coordinates are in image convention (x right, y down).
+    Returns an (N, 5) array: centre_x_px, centre_y_px, equivalent_diameter_px,
+    area_px, eccentricity. Coordinates are in image convention (x right,
+    y down).
+
+    The keyword arguments are the method's tunable parameters, exposed so that
+    `robustness.py` can sweep them and report how far each measurand moves.
+    Their defaults are the module constants and are what every other script
+    uses.
     """
     g = img.astype(float)
     if g.ndim == 3:
@@ -80,7 +91,7 @@ def detect(img):
         disc = lab == counts.argmax()
     # Pull the working area in from the rim: the edge is bright and would
     # otherwise be picked up as signal.
-    disc_in = ndi.binary_erosion(disc, structure=_disk(12))
+    disc_in = ndi.binary_erosion(disc, structure=_disk(rim_px))
 
     # 2. Flatten the background. BSE brightness depends on atomic number,
     #    local tilt and topography, so the background level drifts across the
@@ -88,7 +99,7 @@ def detect(img):
     #    wider than a spot estimates that background; subtracting it leaves a
     #    flat map in which the spots are the only structure.
     filled = np.where(disc, g, np.median(g[disc]))
-    background = ndi.median_filter(filled, size=25)
+    background = ndi.median_filter(filled, size=bg_size)
     resid = background - g          # spots read darker than their surround
     resid[~disc_in] = 0
 
@@ -96,7 +107,7 @@ def detect(img):
     bw = (resid > filters.threshold_otsu(resid[disc_in])) & disc_in
     lab = measure.label(bw)
     sizes = np.bincount(lab.ravel())
-    big = np.flatnonzero(sizes >= MIN_SPOT_PX)
+    big = np.flatnonzero(sizes >= min_spot_px)
     bw = np.isin(lab, big[big != 0])
     bw = ndi.binary_fill_holes(bw)
 
@@ -105,11 +116,12 @@ def detect(img):
     props = measure.regionprops(measure.label(bw))
     med_area = np.median([p.area for p in props])
     keep = [p for p in props
-            if 0.3 * med_area <= p.area <= 4.0 * med_area
-            and p.eccentricity < 0.85]
+            if area_lo * med_area <= p.area <= area_hi * med_area
+            and p.eccentricity < max_ecc]
 
     return np.array([[p.centroid[1], p.centroid[0],
-                      2.0 * np.sqrt(p.area / np.pi), p.area] for p in keep])
+                      2.0 * np.sqrt(p.area / np.pi), p.area, p.eccentricity]
+                     for p in keep])
 
 
 def lattice_pitch_and_angle(pts):
@@ -131,6 +143,29 @@ def lattice_pitch_and_angle(pts):
 
 
 # ------------------------------------------------------------- registration
+
+def affine_fit(src, dst):
+    """Full six-parameter affine fit, used only as a diagnostic.
+
+    The similarity model has four parameters and cannot represent an
+    anisotropic scale or a shear. Fitting the richer model and reporting how
+    far it departs from a similarity answers, from the data rather than by
+    assumption, whether the extra freedom is needed. A tilted plate seen from
+    above is foreshortened along the tilt axis, so a real tilt shows up here as
+    anisotropy: 10 deg gives 1.5 %, 15 deg gives 3.4 %.
+
+    Returns (scale_major, scale_minor, shear_deg, rms_px).
+    """
+    design = np.column_stack([src, np.ones(len(src))])
+    coef = np.linalg.lstsq(design, dst, rcond=None)[0]
+    lin = coef[:2].T
+    sv = np.linalg.svd(lin, compute_uv=False)
+    _, upper = np.linalg.qr(lin)
+    shear = np.degrees(np.arctan2(upper[0, 1], upper[0, 0]))
+    shear = (shear + 90) % 180 - 90          # fold onto (-90, 90]
+    rms = float(np.sqrt(((dst - design @ coef) ** 2).sum(1).mean()))
+    return float(sv[0]), float(sv[1]), shear, rms
+
 
 def umeyama(src, dst):
     """Least-squares similarity transform src -> dst (Umeyama 1991).
@@ -165,7 +200,8 @@ def mutual_nearest(pred, obs, gate):
     return ii, i_ref[ii]
 
 
-def register(ref_mm, obs_px, pitch_px, iters=ICP_ITERS):
+def register(ref_mm, obs_px, pitch_px, iters=ICP_ITERS,
+             gate_fraction=GATE_FRACTION):
     """Fit the similarity transform that maps the nominal pattern onto the spots.
 
     Returns (scale, rotation, translation, ref_idx, obs_idx, residual, ref_xy)
@@ -179,14 +215,14 @@ def register(ref_mm, obs_px, pitch_px, iters=ICP_ITERS):
     rot = np.eye(2)
     trans = obs_px.mean(0) - scale * (rot @ ref.mean(0))
 
-    gate = GATE_FRACTION * scale * PITCH_MM
+    gate = gate_fraction * scale * PITCH_MM
     for _ in range(iters):
         pred = (scale * (rot @ ref.T).T) + trans
         ii, jj = mutual_nearest(pred, obs_px, gate)
         if len(ii) < 20:
             break
         scale, rot, trans = umeyama(ref[ii], obs_px[jj])
-        gate = GATE_FRACTION * scale * PITCH_MM
+        gate = gate_fraction * scale * PITCH_MM
 
     pred = (scale * (rot @ ref.T).T) + trans
     ii, jj = mutual_nearest(pred, obs_px, gate)
@@ -414,17 +450,25 @@ def main(img_path, ref_path=None):
                "radius_mm,dev_radial_um,dev_tangential_um",
         comments="")
 
+    sx, sy, shear, aff_rms = affine_fit(ref[ii], obs[jj])
+    aniso = 100.0 * (sx / sy - 1.0)
+    print(f"affine diagnostic   axis scales {sx:.5f} / {sy:.5f} "
+          f"(anisotropy {aniso:+.3f} %), shear {shear:+.4f} deg, "
+          f"RMS {aff_rms * um_per_px:.1f} um")
+
     with open(base + "-summary.csv", "w") as fh:
         fh.write("image,spots_detected,matched_pairs,reference_points,"
                  "lattice_pitch_px,scale_px_per_mm,pixel_size_um,"
                  "rotation_deg_mod90,dx_px,dy_px,rms_um,median_um,p95_um,"
-                 "max_um\n")
+                 "max_um,affine_sx,affine_sy,affine_anisotropy_pct,"
+                 "affine_shear_deg,affine_rms_um\n")
         fh.write(f"{os.path.basename(base)},{len(obs)},{len(ii)},{len(ref)},"
                  f"{pitch_px:.4f},{scale:.5f},{um_per_px:.3f},{theta:.5f},"
                  f"{trans[0]:.2f},{trans[1]:.2f},"
                  f"{np.sqrt((resid ** 2).sum(1).mean()) * um_per_px:.2f},"
                  f"{np.median(dev):.2f},{np.percentile(dev, 95):.2f},"
-                 f"{dev.max():.2f}\n")
+                 f"{dev.max():.2f},{sx:.5f},{sy:.5f},{aniso:.4f},"
+                 f"{shear:.4f},{aff_rms * um_per_px:.2f}\n")
 
     overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
                    um_per_px, os.path.basename(base), base + "-overlay.png")

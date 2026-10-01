@@ -1,29 +1,33 @@
 #!/usr/bin/env python3
 """
-MT035A Week 2 - is the measured deviation systematic or random?
+MT035A - is the measured deviation systematic or random?
 
-The brief asks whether the observed deviations appear systematic or random and
-whether different regions of the field behave differently. A single image
-cannot answer that: any residual left after the similarity fit looks like a
-pattern. Two independent snapshots of the same plate can, because a deviation
-caused by the machine repeats from image to image while detection noise does
-not.
+The brief asks whether the observed deviations appear systematic or random.
+A single image cannot answer that: any residual left after the similarity fit
+looks like a pattern. Several independent snapshots of the same plate can,
+because a deviation caused by the machine repeats from image to image while
+detection noise does not.
 
-For every spot detected in both images this script compares the two deviation
-vectors and splits the variance:
+With N images the variance of each spot's deviation splits the usual way:
 
-    var(observed)  =  var(systematic)  +  var(noise)
-    var(d1 - d2)   =  2 * var(noise)                  (noise independent)
-    cov(d1, d2)    =  var(systematic)                 (systematic shared)
+    between-image mean      ->  the reproducible (systematic) field
+    scatter about that mean ->  the random part
+
+For N = 2 this reduces to the familiar pair of identities,
+var(d1 - d2) = 2*var(noise) and cov(d1, d2) = var(systematic), and the script
+also prints the pairwise correlations so the two agree.
 
 Usage
 -----
-    python3 analyse_repeatability.py A-deviations.csv B-deviations.csv \
-            [output.png]
+    python3 analyse_repeatability.py A-deviations.csv B-deviations.csv [...] \
+            [-o output.png]
+
+Any number of deviation tables from two upwards.
 
 Requires: numpy, matplotlib.
 """
 
+import itertools
 import os
 import sys
 
@@ -35,106 +39,105 @@ import matplotlib.pyplot as plt
 
 def load(path):
     t = np.genfromtxt(path, delimiter=",", names=True)
-    return {int(k): n for n, k in enumerate(t["ref_idx"])}, t
+    name = os.path.basename(path).replace("-deviations.csv", "")
+    return name, {int(k): n for n, k in enumerate(t["ref_idx"])}, t
 
 
-def main(path_a, path_b, out_path=None):
-    out_path = out_path or "week2-repeatability.png"
-    idx_a, a = load(path_a)
-    idx_b, b = load(path_b)
+def main(paths, out_path="week2-repeatability.png"):
+    sets = [load(p) for p in paths]
+    names = [s[0] for s in sets]
+    n_img = len(sets)
+    if n_img < 2:
+        sys.exit("need at least two deviation tables")
 
-    pairs = [(idx_a[int(k)], n) for n, k in enumerate(b["ref_idx"])
-             if int(k) in idx_a]
-    p = np.array([i for i, _ in pairs])
-    q = np.array([j for _, j in pairs])
-    name_a = os.path.basename(path_a).replace("-deviations.csv", "")
-    name_b = os.path.basename(path_b).replace("-deviations.csv", "")
-    print(f"spots detected in both images: {len(p)}")
+    common = sorted(set.intersection(*[set(s[1]) for s in sets]))
+    print(f"{n_img} images | spots detected in all of them: {len(common)}")
 
-    stats = {}
-    for axis in ("dx_um", "dy_um"):
-        x, y = a[axis][p], b[axis][q]
-        corr = np.corrcoef(x, y)[0, 1]
-        cov = corr * x.std() * y.std()                  # systematic variance
-        noise_var = (x - y).var() / 2.0                 # random variance
-        stats[axis] = dict(corr=corr,
-                           systematic=np.sqrt(max(cov, 0.0)),
-                           noise=np.sqrt(noise_var),
-                           x=x, y=y)
-        print(f"  {axis}: corr {corr:+.3f} | systematic sd "
-              f"{stats[axis]['systematic']:.1f} um | random sd "
-              f"{stats[axis]['noise']:.1f} um")
+    # (N, M, 2) stack of deviation vectors, micrometres
+    dev = np.array([[[t["dx_um"][idx[r]], t["dy_um"][idx[r]]] for r in common]
+                    for _, idx, t in sets])
 
-    d1 = np.hypot(a["dx_um"][p], a["dy_um"][p])
-    d2 = np.hypot(b["dx_um"][q], b["dy_um"][q])
-    diff = np.hypot(a["dx_um"][p] - b["dx_um"][q],
-                    a["dy_um"][p] - b["dy_um"][q])
-    rms1, rms2 = np.sqrt((d1 ** 2).mean()), np.sqrt((d2 ** 2).mean())
-    rms_diff = np.sqrt((diff ** 2).mean())
-    print(f"  RMS |deviation|: {rms1:.1f} and {rms2:.1f} um")
-    print(f"  RMS |d1 - d2|:   {rms_diff:.1f} um "
-          f"(would be {np.sqrt(2) * rms1:.1f} um if fully independent)")
+    mean = dev.mean(axis=0)                      # reproducible field
+    resid = dev - mean                           # what does not repeat
+    # Unbiased split. With d_i = s + n_i, the scatter about the per-spot mean
+    # has expectation (N-1)*sigma^2, so sigma^2 is that sum divided by N-1 --
+    # not multiplied by N/(N-1), which overstates the noise N-fold and drives
+    # the systematic term to zero.
+    noise_var = (resid ** 2).sum(axis=0).mean(axis=0) / (n_img - 1)
+    total_var = (dev ** 2).mean(axis=(0, 1))
+    syst_var = np.maximum(total_var - noise_var, 0.0)
 
-    sys_tot = np.hypot(stats["dx_um"]["systematic"], stats["dy_um"]["systematic"])
-    noi_tot = np.hypot(stats["dx_um"]["noise"], stats["dy_um"]["noise"])
-    print(f"  => systematic {sys_tot:.1f} um vs random {noi_tot:.1f} um")
+    for ax, lab in enumerate("XY"):
+        print(f"  d{lab}: systematic sd {np.sqrt(syst_var[ax]):5.1f} um | "
+              f"random sd {np.sqrt(noise_var[ax]):5.1f} um")
+    syst_tot = np.sqrt(syst_var.sum())
+    noise_tot = np.sqrt(noise_var.sum())
+    print(f"  => systematic {syst_tot:.1f} um vs random {noise_tot:.1f} um")
 
+    print("\n  pairwise correlation of the same spot's deviation:")
+    pairs = []
+    for i, j in itertools.combinations(range(n_img), 2):
+        cx = np.corrcoef(dev[i, :, 0], dev[j, :, 0])[0, 1]
+        cy = np.corrcoef(dev[i, :, 1], dev[j, :, 1])[0, 1]
+        pairs.append((names[i], names[j], cx, cy))
+        print(f"    {names[i]} vs {names[j]}:  dX {cx:+.3f}  dY {cy:+.3f}")
+
+    # ---------------------------------------------------------------- figure
     fig, ax = plt.subplots(1, 3, figsize=(16, 5))
 
-    s = stats["dx_um"]
-    lim = max(abs(s["x"]).max(), abs(s["y"]).max()) * 1.05
+    i, j = 0, 1
+    lim = max(np.abs(dev[[i, j], :, 0]).max(), 1) * 1.05
     ax[0].plot([-lim, lim], [-lim, lim], color="#bbbbbb", lw=1, zorder=0)
-    ax[0].axhline(0, color="#dddddd", lw=.8, zorder=0)
-    ax[0].axvline(0, color="#dddddd", lw=.8, zorder=0)
-    ax[0].scatter(s["x"], s["y"], s=6, alpha=.35, color="#1f77b4",
+    ax[0].scatter(dev[i, :, 0], dev[j, :, 0], s=6, alpha=.35, color="#1f77b4",
                   edgecolors="none")
-    ax[0].set_xlabel(f"dX in {name_a}, um")
-    ax[0].set_ylabel(f"dX in {name_b}, um")
+    ax[0].set_xlabel(f"dX in {names[i]}, um")
+    ax[0].set_ylabel(f"dX in {names[j]}, um")
     ax[0].set_aspect("equal")
-    ax[0].set_title(f"same spot, two images\ncorrelation {s['corr']:+.2f} "
-                    "-> a repeating component exists", fontsize=10)
+    ax[0].set_title(f"same spot, two images\ncorrelation {pairs[0][2]:+.2f}",
+                    fontsize=10)
 
-    # RMS deviation against distance from the field centre
-    for tab, pick, name, colour in ((a, p, name_a, "#1f77b4"),
-                                    (b, q, name_b, "#d62728")):
-        r = tab["radius_mm"][pick]
-        dev = np.hypot(tab["dx_um"][pick], tab["dy_um"][pick])
-        edges = np.linspace(0, r.max(), 9)
-        mid = 0.5 * (edges[:-1] + edges[1:])
-        rms = [np.sqrt((dev[(r >= lo) & (r < hi)] ** 2).mean())
-               if ((r >= lo) & (r < hi)).sum() > 4 else np.nan
+    first = sets[0][2]
+    r_all = np.array([first["radius_mm"][sets[0][1][k]] for k in common])
+    edges = np.linspace(0, r_all.max(), 9)
+    mid = 0.5 * (edges[:-1] + edges[1:])
+    for k in range(n_img):
+        mag = np.hypot(dev[k, :, 0], dev[k, :, 1])
+        rms = [np.sqrt((mag[(r_all >= lo) & (r_all < hi)] ** 2).mean())
+               if ((r_all >= lo) & (r_all < hi)).sum() > 4 else np.nan
                for lo, hi in zip(edges[:-1], edges[1:])]
-        ax[1].plot(mid, rms, "o-", color=colour, label=name)
+        ax[1].plot(mid, rms, "o-", label=names[k])
     ax[1].set_xlabel("distance from field centre, mm")
     ax[1].set_ylabel("RMS |deviation|, um")
     ax[1].legend(fontsize=8)
-    ax[1].set_title("the error grows towards the rim\n"
-                    "in both images", fontsize=10)
     ax[1].grid(alpha=.25)
+    ax[1].set_title("the error grows towards the rim", fontsize=10)
 
-    # the shared (systematic) part of the field: the mean of the two images
-    mx = 0.5 * (a["dx_um"][p] + b["dx_um"][q])
-    my = 0.5 * (a["dy_um"][p] + b["dy_um"][q])
-    mag = np.hypot(mx, my)
-    qv = ax[2].quiver(a["obs_x_px"][p], a["obs_y_px"][p], mx, -my, mag,
-                      cmap="viridis", angles="xy", scale_units="xy",
-                      scale=1 / 0.6, width=.004)
+    px = np.array([first["obs_x_px"][sets[0][1][k]] for k in common])
+    py = np.array([first["obs_y_px"][sets[0][1][k]] for k in common])
+    mag = np.hypot(mean[:, 0], mean[:, 1])
+    q = ax[2].quiver(px, py, mean[:, 0], -mean[:, 1], mag, cmap="viridis",
+                     angles="xy", scale_units="xy", scale=1 / 0.6, width=.004)
     ax[2].set_aspect("equal"); ax[2].invert_yaxis()
     ax[2].set_xticks([]); ax[2].set_yticks([])
-    ax[2].set_title("deviation averaged over both images\n"
+    ax[2].set_title(f"deviation averaged over {n_img} images\n"
                     "= the reproducible part", fontsize=10)
-    fig.colorbar(qv, ax=ax[2], fraction=.046).set_label("|mean deviation|, um",
-                                                        fontsize=9)
+    fig.colorbar(q, ax=ax[2], fraction=.046).set_label("|mean deviation|, um",
+                                                       fontsize=9)
 
-    fig.suptitle("MT035A Week 2 - systematic vs random deviation "
-                 f"(systematic {sys_tot:.0f} um, random {noi_tot:.0f} um)",
+    fig.suptitle(f"MT035A - systematic vs random deviation over {n_img} images "
+                 f"(systematic {syst_tot:.0f} um, random {noise_tot:.0f} um)",
                  fontsize=13)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=120, bbox_inches="tight", metadata={"Software": None})
-    print("written:", out_path)
+    fig.savefig(out_path, dpi=120, bbox_inches="tight",
+                metadata={"Software": None})
+    print("\nwritten:", out_path)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        sys.exit(__doc__)
-    main(*sys.argv[1:4])
+    args = [a for a in sys.argv[1:] if a != "-o"]
+    if "-o" in sys.argv:
+        out = sys.argv[sys.argv.index("-o") + 1]
+        args = [a for a in args if a != out]
+        main(args, out)
+    else:
+        main(args)

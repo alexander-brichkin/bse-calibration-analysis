@@ -63,4 +63,14 @@ if [ "${#shots[@]}" -ge 2 ]; then
     echo
     echo "=== orientation cross-check ==="
     python3 check_orientation.py "${shots[0]}" "${shots[1]}"
+
+    echo
+    echo "=== systematic vs random, over every image ==="
+    devs=()
+    for shot in "${shots[@]}"; do devs+=("${shot%.*}-deviations.csv"); done
+    python3 analyse_repeatability.py "${devs[@]}"
+
+    echo
+    echo "=== spot geometry across the plate ==="
+    python3 focus_profile.py "${shots[@]}"
 fi
