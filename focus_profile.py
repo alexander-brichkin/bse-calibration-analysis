@@ -40,7 +40,9 @@ BINS = np.array([0.0, 0.3, 0.5, 0.7, 0.85, 1.0])
 
 def profile(path):
     spots = B.detect(io.imread(path), **RELAXED)
-    x, y, diam, area, ecc = spots.T
+    # detect() returns six columns; unpack by index so that adding a
+    # measurand later cannot silently break this.
+    x, y, diam, area, ecc = (spots[:, i] for i in range(5))
     r = np.hypot(x - x.mean(), y - y.mean())
     r = r / r.max()
     rows = []

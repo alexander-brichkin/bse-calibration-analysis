@@ -231,6 +231,25 @@ panel follows spot area along each image's own departure direction. A radial
 average — the obvious thing to plot — hides all of it, because a tilt is
 directional and averaging over angle destroys exactly the signal.
 
+**The spots do not become measurably more oval.** The obvious shape metric
+for a tilted plate is the aspect ratio of a spot, major axis over minor, which
+is 1.000 for a circle. It does not separate the two populations either:
+
+| plate | aspect ratio, median | 95th percentile | eccentricity, median |
+|---|---|---|---|
+| flat 1 | 1.162 | 1.440 | 0.509 |
+| flat 2 | 1.095 | 1.298 | 0.406 |
+| flat 3 | 1.171 | 1.466 | 0.520 |
+| **tilted A** | **1.105** | **1.285** | **0.425** |
+| **tilted B** | **1.087** | **1.232** | **0.392** |
+
+Both tilted plates are *rounder* than two of the three flats. The metric is
+reported because it is the natural one to ask for, and the honest answer is
+that at these tilt angles it carries no information: the spread between
+nominally identical flat plates is larger than any difference the tilt makes.
+That is the same verdict as the affine anisotropy, and for the same physical
+reason. The focus gradient below is the measurement that does separate them.
+
 **A flat plate already varies, and the raw gradient separates nothing.** Spot
 area has a directional gradient of 0.37–0.53 %/mm on a flat plate, because the
 BSE detector sits to one side. The clearest demonstration is TILT_A: its raw
@@ -421,9 +440,25 @@ because it re-runs the whole pipeline 61 times; `python3 robustness.py
 `ref_x_mm`, `ref_y_mm`, `pred_x_px`, `pred_y_px`, `obs_x_px`, `obs_y_px`,
 `obs_x_mm`, `obs_y_mm` (observed centre in the BSE image's **own**
 calibration), `dx_um`, `dy_um`, `dist_um`, `radius_mm`, `dev_radial_um`,
-`dev_tangential_um`.
+`dev_tangential_um`, `lattice_i`, `lattice_j`, `aspect_ratio`,
+`eccentricity`, `detected`.
 
-`<image>-summary.csv`, one row per image, adds the affine diagnostic.
+`lattice_i` and `lattice_j` are the spot's identity on the pattern, not a row
+number: the reference spot is (0, 0), its neighbour one pitch along +x is
+(1, 0), one along +y is (0, 1), and the pattern runs from (−22, −22) to
+(22, 22). All 1597 reference spots get a distinct pair, and the largest
+distance between a spot and the node it was assigned to is 0.014 of a pitch —
+printed on every run, because anything near 0.5 would mean a spot had been
+given the wrong identity and every comparison built on these IDs would be
+quietly wrong. Keying on (i, j) is what lets a spot be followed between
+images, and between the three implementations in the group.
+
+`aspect_ratio` and `eccentricity` are blank for a spot recovered by the second
+pass: it has a measured position but no blob, so its shape is undefined, and a
+blank is written rather than a zero.
+
+`<image>-summary.csv`, one row per image, adds the affine diagnostic and the
+shape statistics.
 
 `<image>-matched_spot_residuals.csv` carries the same per-spot data in the
 column order the rest of the group is using, so tables from different pipelines

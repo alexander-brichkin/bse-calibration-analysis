@@ -83,9 +83,14 @@ def detect(img, bg_size=BG_FILTER_PX, min_spot_px=MIN_SPOT_PX,
            bg_mode=BG_MODE, split=SPLIT_MERGED, return_maps=False):
     """Find the spots on a BSE snapshot.
 
-    Returns an (N, 5) array: centre_x_px, centre_y_px, equivalent_diameter_px,
-    area_px, eccentricity. Coordinates are in image convention (x right,
-    y down).
+    Returns an (N, 6) array: centre_x_px, centre_y_px, equivalent_diameter_px,
+    area_px, eccentricity, aspect_ratio. Coordinates are in image convention
+    (x right, y down).
+
+    Eccentricity and aspect ratio measure the same elongation on two scales. A
+    circle is eccentricity 0 and aspect ratio 1; the aspect ratio is the more
+    readable of the two for a tilted plate, where the question is how oval a
+    spot has become, so both are reported.
 
     The keyword arguments are the method's tunable parameters, exposed so that
     `robustness.py` can sweep them and report how far each measurand moves.
@@ -159,11 +164,21 @@ def detect(img, bg_size=BG_FILTER_PX, min_spot_px=MIN_SPOT_PX,
             and p.eccentricity < max_ecc]
 
     spots = np.array([[p.centroid[1], p.centroid[0],
-                       2.0 * np.sqrt(p.area / np.pi), p.area, p.eccentricity]
+                       2.0 * np.sqrt(p.area / np.pi), p.area, p.eccentricity,
+                       _aspect(p)]
                       for p in keep])
     if return_maps:
         return spots, resid, disc_in
     return spots
+
+
+def _aspect(prop):
+    """Major axis over minor axis. 1.0 is a circle; a tilt makes it grow."""
+    major = getattr(prop, "axis_major_length", None)
+    minor = getattr(prop, "axis_minor_length", None)
+    if major is None:                       # older scikit-image
+        major, minor = prop.major_axis_length, prop.minor_axis_length
+    return float(major / minor) if minor > 1e-9 else float("nan")
 
 
 def _split_merged(lab, resid, suspect, min_dist=7):
@@ -513,6 +528,26 @@ def load_reference(path):
     return xy, origin, float("nan")
 
 
+def lattice_ids(xy_mm):
+    """Integer (i, j) lattice coordinates for every reference spot.
+
+    The brief asks for spots to carry an identity rather than a row number:
+    the reference spot is (0, 0), its neighbour one pitch along +x is (1, 0),
+    one pitch along +y is (0, 1). `load_reference` already returns millimetres
+    measured from the reference spot on a 2.000 mm lattice, so the index is
+    the position divided by the pitch.
+
+    Returns (ij, worst_slip). `worst_slip` is the largest distance, in units
+    of a pitch, between a spot and the lattice node it was assigned to. It is
+    reported rather than ignored: anything approaching 0.5 would mean a spot
+    had been given the wrong identity, and that would quietly corrupt every
+    comparison built on these IDs.
+    """
+    ij = np.round(xy_mm / PITCH_MM).astype(int)
+    slip = float(np.abs(xy_mm / PITCH_MM - ij).max())
+    return ij, slip
+
+
 # ------------------------------------------------------------------ figures
 
 def overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
@@ -599,6 +634,23 @@ def main(img_path, ref_path=None):
     (scale, rot, trans, ii, jj, resid, ref, obs, n_recovered,
      pitch_px, angle, _spots) = fit(img, ref_mm)
 
+    # Every spot gets an identity on the lattice, not a row number: the
+    # reference spot is (0, 0) and the neighbours are (1, 0), (0, 1) and so
+    # on. The deviation tables are keyed on this, so a spot can be followed
+    # between images and between the three implementations in the group.
+    ref_ij, ij_slip = lattice_ids(ref_mm)
+    print(f"lattice IDs        (i, j) from ({ref_ij[:, 0].min()}, "
+          f"{ref_ij[:, 1].min()}) to ({ref_ij[:, 0].max()}, "
+          f"{ref_ij[:, 1].max()}), "
+          f"{len(set(map(tuple, ref_ij)))} unique of {len(ref_ij)}; "
+          f"worst node slip {ij_slip:.4f} pitch")
+
+    # Shape per matched spot. A recovered spot has a position but no blob, so
+    # its shape is undefined and is written as a blank rather than a zero.
+    shape = np.full((len(jj), 2), np.nan)
+    det = jj < len(_spots)
+    shape[det] = _spots[jj[det]][:, [5, 4]]       # aspect ratio, eccentricity
+
     um_per_px = 1000.0 / scale
     theta = np.degrees(np.arctan2(rot[1, 0], rot[0, 0]))
     dev = np.hypot(*resid.T) * um_per_px
@@ -661,11 +713,13 @@ def main(img_path, ref_path=None):
                          pred_all[ii], obs[jj], obs_mm,
                          resid * um_per_px, dev,
                          radius_mm, d_radial, d_tangential,
+                         ref_ij[ii], shape,
                          (jj < len(_spots)).astype(float)]),
         delimiter=",", fmt="%.4f",
         header="ref_idx,obs_idx,ref_x_mm,ref_y_mm,pred_x_px,pred_y_px,"
                "obs_x_px,obs_y_px,obs_x_mm,obs_y_mm,dx_um,dy_um,dist_um,"
-               "radius_mm,dev_radial_um,dev_tangential_um,detected",
+               "radius_mm,dev_radial_um,dev_tangential_um,"
+               "lattice_i,lattice_j,aspect_ratio,eccentricity,detected",
         comments="")
 
     sx, sy, shear, aff_rms = affine_fit(ref[ii], obs[jj])
@@ -679,14 +733,18 @@ def main(img_path, ref_path=None):
                  "lattice_pitch_px,scale_px_per_mm,pixel_size_um,"
                  "rotation_deg_mod90,dx_px,dy_px,rms_um,median_um,p95_um,"
                  "max_um,affine_sx,affine_sy,affine_anisotropy_pct,"
-                 "affine_shear_deg,affine_rms_um\n")
+                 "affine_shear_deg,affine_rms_um,"
+                 "aspect_ratio_median,aspect_ratio_p95,eccentricity_median\n")
         fh.write(f"{os.path.basename(base)},{len(obs)},{len(ii)},{len(ref)},"
                  f"{pitch_px:.4f},{scale:.5f},{um_per_px:.3f},{theta:.5f},"
                  f"{trans[0]:.2f},{trans[1]:.2f},"
                  f"{np.sqrt((resid ** 2).sum(1).mean()) * um_per_px:.2f},"
                  f"{np.median(dev):.2f},{np.percentile(dev, 95):.2f},"
                  f"{dev.max():.2f},{sx:.5f},{sy:.5f},{aniso:.4f},"
-                 f"{shear:.4f},{aff_rms * um_per_px:.2f}\n")
+                 f"{shear:.4f},{aff_rms * um_per_px:.2f},"
+                 f"{np.nanmedian(shape[:, 0]):.4f},"
+                 f"{np.nanpercentile(shape[:, 0], 95):.4f},"
+                 f"{np.nanmedian(shape[:, 1]):.4f}\n")
 
     overlay_figure(img, pred_all, obs, ii, jj, resid, scale, rot, trans,
                    um_per_px, os.path.basename(base), base + "-overlay.png")
