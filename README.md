@@ -271,6 +271,44 @@ Both tilted plates stand clearly above the floor and all three flats sit at or
 below 1.4×, so the measurement separates the two populations — which the raw
 gradient, the anisotropy and the radial profile all failed to do.
 
+### How far the angle can be pushed without asking anyone
+
+Before settling for a gradient we tested whether the angle could be closed
+from the data alone. `tilt_angle_feasibility.py` runs that test, so the
+limitation is demonstrated rather than asserted.
+
+A defocused spot has `d^2 = d0^2 + (2a*dW)^2`, with `a` the beam convergence
+semi-angle and `dW` the working-distance error. On a plate tilted by alpha,
+`dW = W0 + x*sin(alpha)`, so the area picks up a linear term
+`L = 8a^2*W0*sin(alpha)` and a quadratic term `Q = 4a^2*sin^2(alpha)`. One
+measured gradient, three unknowns. But they cancel in one place:
+
+**The ratio of the two tilted plates is measurable now.** `L_A/L_B =
+sin(alpha_A)/sin(alpha_B)`, because `a` and `W0` drop out, provided both
+images share the beam settings. Fitted three ways (plain least squares,
+outlier-trimmed, spatially binned medians) the excess gradients come out at
+3.3-3.4x and 2.8-2.9x the flat-to-flat floor, giving
+
+> **sin(alpha_A) / sin(alpha_B) = 1.19**, spread 1.17 to 1.22 across the
+> three fits.
+
+The first tilted plate is the steeper of the two, by about a fifth. That is a
+result, not a placeholder, and one number from the course staff turns it into
+both angles.
+
+**Self-calibration fails, and that is why no absolute angle appears.** A flat
+plate is also defocused off-axis, since the beam path to radius `r` is longer
+by `r^2/(2*WD0)`. That would give `R = 4a^2*W0/WD0` and hence
+`sin(alpha) = L/(2*R*WD0)`, leaving only the working distance unknown.
+Measured on the three flats, `R` comes out at **+1.33e-5, -4.39e-5 and
++6.97e-5 per mm^2** - the sign is not stable, let alone the magnitude. There
+is no defocus calibration in these images to use, and the working distance
+would still be needed on top.
+
+The weekly goals document anticipates exactly this: *"If the available data
+cannot support a reliable tilt angle, report a focus/defocus gradient instead
+and explain the limitation."*
+
 **No tilt angle is reported.** Converting %/mm of spot area into degrees needs
 the beam's depth-of-focus characteristic — how spot area grows per millimetre
 of working-distance error — which the supplied data does not contain. What the
@@ -428,6 +466,7 @@ because it re-runs the whole pipeline 61 times; `python3 robustness.py
 | `analyse_repeatability.py` | systematic versus random, over any number of images |
 | `focus_profile.py` | spot area, diameter and eccentricity against radius |
 | `tilt_analysis.py` | tilt against a flat-plate baseline |
+| `tilt_angle_feasibility.py` | tests whether the absolute angle can be closed from the data; reports the ratio of the two tilts |
 | `check_orientation.py` | resolves the 90° lattice ambiguity |
 | `robustness.py` | controlled degradations and parameter sweeps |
 | `selftest.py` | synthetic ground-truth check |

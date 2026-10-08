@@ -102,6 +102,9 @@ if ls TILT_*.png >/dev/null 2>&1; then
     for shot in "${shots[@]}"; do flats+=("$shot"); done
     [ -f img3.png ] && flats+=(img3.png)
     python3 tilt_analysis.py --flat "${flats[@]}" --test TILT_*.png
+    echo
+    echo "=== Week 3: can the absolute angle be closed from the data? ==="
+    python3 tilt_angle_feasibility.py --flat "${flats[@]}" --test TILT_*.png
 else
     echo
     echo "(skipping Week 3: no TILT_*.png in this directory)"
